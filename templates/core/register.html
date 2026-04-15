@@ -1,0 +1,31 @@
+{% extends "core/base.html" %}
+{% block title %}Register - Tournament Manager{% endblock %}
+{% block public_content %}
+<div class="card">
+    <div class="card-header"><h2>Register Team</h2></div>
+    <div class="card-body">
+        {% if tournament %}
+        <p class="text-muted mb-2">Registering for: <strong>{{ tournament.name }}</strong></p>
+        <form method="post">
+            {% csrf_token %}
+            {% for field in form %}
+            <div class="form-group">
+                <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                {{ field }}
+                {% if field.errors %}
+                <small class="text-danger">{{ field.errors.0 }}</small>
+                {% endif %}
+            </div>
+            {% endfor %}
+            {% if form.non_field_errors %}
+            <div class="alert alert-error">{{ form.non_field_errors.0 }}</div>
+            {% endif %}
+            <button type="submit" class="btn btn-primary btn-lg" style="width:100%">Register</button>
+        </form>
+        {% else %}
+        <p class="text-muted">No tournament available for registration.</p>
+        {% endif %}
+        <p class="text-muted mt-2 text-center"><a href="{% url 'login' %}">Back to login</a></p>
+    </div>
+</div>
+{% endblock %}

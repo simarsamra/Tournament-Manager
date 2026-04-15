@@ -1,0 +1,76 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Tournament Manager{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+{% if user.is_authenticated %}
+<div class="app-layout">
+    <aside class="sidebar">
+        <div class="sidebar-brand">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M8 12l3 3 5-5"/></svg>
+            Tournament Manager
+        </div>
+        <nav class="sidebar-nav">
+            <div class="sidebar-section">Main</div>
+            <a href="{% url 'dashboard' %}" class="{% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}">📊 Dashboard</a>
+            <a href="{% url 'fixtures' %}" class="{% if request.resolver_match.url_name == 'fixtures' %}active{% endif %}">📋 Fixtures</a>
+            <a href="{% url 'teams' %}" class="{% if request.resolver_match.url_name == 'teams' or request.resolver_match.url_name == 'team_detail' %}active{% endif %}">👥 Teams</a>
+            <a href="{% url 'standings' %}" class="{% if request.resolver_match.url_name == 'standings' %}active{% endif %}">🏆 Standings</a>
+            <a href="{% url 'analytics' %}" class="{% if request.resolver_match.url_name == 'analytics' %}active{% endif %}">📈 Analytics</a>
+            <div class="sidebar-section">Actions</div>
+            <a href="{% url 'rescheduling' %}" class="{% if request.resolver_match.url_name == 'rescheduling' %}active{% endif %}">🔄 Rescheduling</a>
+            <a href="{% url 'open_slots' %}" class="{% if request.resolver_match.url_name == 'open_slots' %}active{% endif %}">📅 Open Slots</a>
+            {% if user.is_staff %}
+            <div class="sidebar-section">Admin</div>
+            <a href="{% url 'tournament_setup' %}" class="{% if request.resolver_match.url_name == 'tournament_setup' %}active{% endif %}">⚙️ New Tournament</a>
+            <a href="{% url 'backup' %}" class="{% if request.resolver_match.url_name == 'backup' %}active{% endif %}">💾 Backup</a>
+            <a href="{% url 'audit_log' %}" class="{% if request.resolver_match.url_name == 'audit_log' %}active{% endif %}">📝 Audit Log</a>
+            <a href="{% url 'settings' %}" class="{% if request.resolver_match.url_name == 'settings' %}active{% endif %}">🔧 Settings</a>
+            {% endif %}
+        </nav>
+    </aside>
+    <div class="main-content">
+        <header class="topbar">
+            <div class="topbar-left">
+                <button class="menu-toggle">☰</button>
+                <span>{% block page_header %}{% endblock %}</span>
+            </div>
+            <div class="topbar-right">
+                {% if team %}
+                <span class="text-muted">Team: <strong>{{ team.name }}</strong></span>
+                {% elif user.is_staff %}
+                <span class="text-muted">Organizer: <strong>{{ user.username }}</strong></span>
+                {% endif %}
+                <a href="{% url 'logout' %}" class="btn btn-outline btn-sm">Logout</a>
+            </div>
+        </header>
+        <div class="content">
+            {% if messages %}
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+            {% endfor %}
+            {% endif %}
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="content" style="max-width: 500px; margin: 4rem auto; padding: 2rem;">
+    {% if messages %}
+    {% for message in messages %}
+    <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+    {% endfor %}
+    {% endif %}
+    {% block public_content %}{% endblock %}
+</div>
+{% endif %}
+<script src="{% static 'js/app.js' %}"></script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

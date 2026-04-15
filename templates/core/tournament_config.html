@@ -1,0 +1,98 @@
+{% extends "core/base.html" %}
+{% block title %}Configure: {{ tournament.name }}{% endblock %}
+{% block page_header %}Configure Tournament{% endblock %}
+{% block content %}
+<h1 class="page-title">{{ tournament.name }} <span class="badge badge-{{ tournament.status }}">{{ tournament.get_status_display }}</span></h1>
+<p class="text-muted mb-2">Format: {{ tournament.get_format_display }} | Duration: {{ tournament.default_match_duration }}min</p>
+
+<div class="grid grid-3">
+    <!-- Courts -->
+    <div class="card">
+        <div class="card-header">Courts ({{ courts.count }})</div>
+        <div class="card-body">
+            {% for court in courts %}
+            <div class="d-flex justify-between align-center mb-1">
+                <span>{{ court.name }}</span>
+                <span class="badge {% if court.is_available %}badge-active{% else %}badge-withdrawn{% endif %}">
+                    {% if court.is_available %}Available{% else %}Unavailable{% endif %}
+                </span>
+            </div>
+            {% empty %}
+            <p class="text-muted">No courts added yet.</p>
+            {% endfor %}
+            <hr style="margin:1rem 0;">
+            <form method="post" action="{% url 'add_court' pk=tournament.pk %}">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label>Court Name</label>
+                    {{ court_form.name }}
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm">Add Court</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Time Slots -->
+    <div class="card">
+        <div class="card-header">Time Slots ({{ time_slots.count }})</div>
+        <div class="card-body">
+            {% for ts in time_slots %}
+            <div class="mb-1" style="font-size:0.85rem;">
+                {{ ts.start_time|date:"M d" }}: {{ ts.start_time|date:"H:i" }} - {{ ts.end_time|date:"H:i" }}
+            </div>
+            {% empty %}
+            <p class="text-muted">No time slots. Default slots will be generated.</p>
+            {% endfor %}
+            <hr style="margin:1rem 0;">
+            <form method="post" action="{% url 'add_timeslot' pk=tournament.pk %}">
+                {% csrf_token %}
+                <div class="form-group"><label>Date</label>{{ timeslot_form.date }}</div>
+                <div class="form-group"><label>Start</label>{{ timeslot_form.start_time }}</div>
+                <div class="form-group"><label>End</label>{{ timeslot_form.end_time }}</div>
+                <button type="submit" class="btn btn-primary btn-sm">Add Slot</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Teams -->
+    <div class="card">
+        <div class="card-header">Teams ({{ teams.count }})</div>
+        <div class="card-body">
+            {% for t in teams %}
+            <div class="d-flex justify-between align-center mb-1">
+                <span>{{ t.name }}</span>
+                <span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span>
+            </div>
+            {% empty %}
+            <p class="text-muted">No teams registered yet.</p>
+            {% endfor %}
+            <hr style="margin:1rem 0;">
+            <form method="post" action="{% url 'add_teams_bulk' pk=tournament.pk %}">
+                {% csrf_token %}
+                <div class="form-group">
+                    <label>Add Teams (bulk)</label>
+                    {{ bulk_team_form.teams_text }}
+                    <small class="text-muted">{{ bulk_team_form.teams_text.help_text }}</small>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm">Add Teams</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% if tournament.status == 'setup' and teams.count >= 2 %}
+<div class="card mt-2">
+    <div class="card-body d-flex justify-between align-center">
+        <div>
+            <strong>Ready to start?</strong> {{ teams.count }} teams, {{ courts.count }} courts configured.
+        </div>
+        <form method="post" action="{% url 'start_tournament' pk=tournament.pk %}">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-success btn-lg" onclick="return confirm('Start the tournament? This will generate all fixtures.')">
+                🚀 Start Tournament
+            </button>
+        </form>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
