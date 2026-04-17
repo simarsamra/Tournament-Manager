@@ -17,11 +17,12 @@ from django.views.decorators.http import require_POST
 
 from .models import (
     Tournament, Court, TimeSlot, Team, Match,
-    RescheduleRequest, OpenSlot, AuditLog, BackupRecord,
+    RescheduleRequest, OpenSlot, AuditLog, BackupRecord, Player,
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
     ScoreSubmitForm, RescheduleForm, TeamPreferencesForm, BulkTeamForm,
+    BulkTeamFileForm,
 )
 from .scheduling import generate_fixtures
 from .standings import calculate_standings, advance_winner, get_bracket_data, check_group_stage_complete
@@ -81,11 +82,18 @@ def register_view(request):
                 username=form.cleaned_data["username"],
                 password=form.cleaned_data["password"],
             )
-            Team.objects.create(
+            team = Team.objects.create(
                 user=user,
                 tournament=tournament,
                 name=form.cleaned_data["team_name"],
             )
+            # Create player records from player names
+            player_names_text = form.cleaned_data.get("player_names", "").strip()
+            if player_names_text:
+                for pname in player_names_text.split("\n"):
+                    pname = pname.strip()
+                    if pname:
+                        Player.objects.create(team=team, name=pname)
             log_action(request, "team_registered",
                        f"Team '{form.cleaned_data['team_name']}' registered",
                        tournament=tournament)
@@ -93,7 +101,10 @@ def register_view(request):
             return redirect("dashboard")
     else:
         form = TeamRegistrationForm()
-    return render(request, "core/register.html", {"form": form, "tournament": tournament})
+    return render(request, "core/register.html", {
+        "form": form, "tournament": tournament,
+        "players_per_team": tournament.players_per_team if tournament else 1,
+    })
 
 
 # -- Dashboard --
@@ -158,14 +169,16 @@ def tournament_config(request, pk):
     if not _is_organizer(request.user):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
+    teams = tournament.teams.prefetch_related("players").all()
     return render(request, "core/tournament_config.html", {
         "tournament": tournament,
         "courts": tournament.courts.all(),
-        "teams": tournament.teams.all(),
+        "teams": teams,
         "time_slots": tournament.time_slots.all(),
         "court_form": CourtForm(),
         "timeslot_form": TimeSlotForm(),
         "bulk_team_form": BulkTeamForm(),
+        "bulk_team_file_form": BulkTeamFileForm(),
     })
 
 
@@ -204,32 +217,82 @@ def add_timeslot(request, pk):
     return redirect("tournament_config", pk=pk)
 
 
+def _parse_team_line(line):
+    """Parse a single team line: team_name,username,password[,player1;player2;...]."""
+    parts = [p.strip() for p in line.split(",")]
+    if len(parts) < 3:
+        return None
+    team_name, username, password = parts[0], parts[1], parts[2]
+    player_names = []
+    if len(parts) >= 4 and parts[3]:
+        player_names = [p.strip() for p in parts[3].split(";") if p.strip()]
+    return {"team_name": team_name, "username": username, "password": password, "player_names": player_names}
+
+
+def _create_teams_from_data(tournament, team_data_list, request):
+    """Create teams and players from parsed data. Returns count of added teams."""
+    added = 0
+    for data in team_data_list:
+        team_name = data["team_name"]
+        username = data["username"]
+        password = data["password"]
+        player_names = data.get("player_names", [])
+        if User.objects.filter(username=username).exists():
+            messages.warning(request, f"Username '{username}' already exists, skipped.")
+            continue
+        if tournament.teams.filter(name=team_name).exists():
+            messages.warning(request, f"Team '{team_name}' already exists, skipped.")
+            continue
+        user = User.objects.create_user(username=username, password=password)
+        team = Team.objects.create(user=user, tournament=tournament, name=team_name)
+        for pname in player_names:
+            Player.objects.create(team=team, name=pname)
+        added += 1
+    return added
+
+
 @login_required
 @require_POST
 def add_teams_bulk(request, pk):
     if not _is_organizer(request.user):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
+
+    team_data_list = []
+
+    # Handle text input
     form = BulkTeamForm(request.POST)
     if form.is_valid():
-        lines = form.cleaned_data["teams_text"].strip().split("\n")
-        added = 0
-        for line in lines:
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) != 3:
+        text = form.cleaned_data.get("teams_text", "").strip()
+        if text:
+            for line in text.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                parsed = _parse_team_line(line)
+                if parsed:
+                    team_data_list.append(parsed)
+
+    # Handle file upload
+    file_form = BulkTeamFileForm(request.POST, request.FILES)
+    if file_form.is_valid() and request.FILES.get("file"):
+        uploaded = request.FILES["file"]
+        content = uploaded.read().decode("utf-8", errors="ignore")
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line:
                 continue
-            team_name, username, password = parts
-            if User.objects.filter(username=username).exists():
-                messages.warning(request, f"Username '{username}' already exists, skipped.")
-                continue
-            if tournament.teams.filter(name=team_name).exists():
-                messages.warning(request, f"Team '{team_name}' already exists, skipped.")
-                continue
-            user = User.objects.create_user(username=username, password=password)
-            Team.objects.create(user=user, tournament=tournament, name=team_name)
-            added += 1
+            parsed = _parse_team_line(line)
+            if parsed:
+                team_data_list.append(parsed)
+
+    if team_data_list:
+        added = _create_teams_from_data(tournament, team_data_list, request)
         log_action(request, "teams_bulk_added", f"Added {added} teams", tournament=tournament)
         messages.success(request, f"{added} teams added.")
+    else:
+        messages.warning(request, "No valid team data found.")
+
     return redirect("tournament_config", pk=pk)
 
 
@@ -564,7 +627,7 @@ def teams_view(request):
     tournament = _get_tournament()
     if not tournament:
         return render(request, "core/teams.html", {"teams": []})
-    teams = tournament.teams.select_related("user").order_by("name")
+    teams = tournament.teams.select_related("user").prefetch_related("players").order_by("name")
     return render(request, "core/teams.html", {
         "tournament": tournament, "teams": teams,
         "is_organizer": _is_organizer(request.user),
@@ -573,7 +636,7 @@ def teams_view(request):
 
 @login_required
 def team_detail(request, pk):
-    team = get_object_or_404(Team.objects.select_related("tournament", "user"), pk=pk)
+    team = get_object_or_404(Team.objects.select_related("tournament", "user").prefetch_related("players"), pk=pk)
     tournament = team.tournament
     matches = Match.objects.filter(tournament=tournament).filter(
         Q(team1=team) | Q(team2=team)
@@ -586,6 +649,7 @@ def team_detail(request, pk):
     stats["losses"] = stats["played"] - stats["wins"]
     return render(request, "core/team_detail.html", {
         "team": team, "tournament": tournament, "matches": matches, "stats": stats,
+        "players": team.players.all(),
         "is_organizer": _is_organizer(request.user),
         "is_own_team": _get_team(request.user) == team,
     })

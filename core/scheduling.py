@@ -275,23 +275,42 @@ def _assign_schedule(tournament, matches_data):
         t1_prefs = set(t1.preferred_courts.values_list("id", flat=True)) if t1 else set()
         t2_prefs = set(t2.preferred_courts.values_list("id", flat=True)) if t2 else set()
         mutual_prefs = t1_prefs & t2_prefs
+        any_prefs = t1_prefs | t2_prefs
 
         assigned = False
         # Try mutual preferred courts first
-        for start_t, end_t, court in slots:
-            slot_key = (start_t, court.id)
-            if slot_key in used_slots:
-                continue
-            if _has_team_conflict(t1, t2, start_t, end_t, used_slots, matches_to_create):
-                continue
-            if mutual_prefs and court.id in mutual_prefs:
-                md["scheduled_time"] = start_t
-                md["scheduled_end_time"] = end_t
-                md["court"] = court
-                used_slots.add(slot_key)
-                assigned = True
-                break
+        if mutual_prefs:
+            for start_t, end_t, court in slots:
+                slot_key = (start_t, court.id)
+                if slot_key in used_slots:
+                    continue
+                if _has_team_conflict(t1, t2, start_t, end_t, used_slots, matches_to_create):
+                    continue
+                if court.id in mutual_prefs:
+                    md["scheduled_time"] = start_t
+                    md["scheduled_end_time"] = end_t
+                    md["court"] = court
+                    used_slots.add(slot_key)
+                    assigned = True
+                    break
 
+        # Try any preferred court
+        if not assigned and any_prefs:
+            for start_t, end_t, court in slots:
+                slot_key = (start_t, court.id)
+                if slot_key in used_slots:
+                    continue
+                if _has_team_conflict(t1, t2, start_t, end_t, used_slots, matches_to_create):
+                    continue
+                if court.id in any_prefs:
+                    md["scheduled_time"] = start_t
+                    md["scheduled_end_time"] = end_t
+                    md["court"] = court
+                    used_slots.add(slot_key)
+                    assigned = True
+                    break
+
+        # Fallback to any available slot
         if not assigned:
             for start_t, end_t, court in slots:
                 slot_key = (start_t, court.id)
@@ -322,47 +341,190 @@ def _has_team_conflict(t1, t2, start, end, used_slots, pending_matches):
 
 
 def _assign_schedule_to_matches(tournament, matches):
-    """Assign schedule to already-created Match objects."""
+    """Assign schedule to already-created Match objects, respecting court preferences."""
     courts = list(tournament.courts.filter(is_available=True))
     if not courts:
         return
 
+    time_slots = list(tournament.time_slots.order_by("start_time"))
     duration = timedelta(minutes=tournament.default_match_duration)
-    start = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
-    slot_idx = 0
+    # Build available slots
+    slots = []
+    if time_slots:
+        for ts in time_slots:
+            current = ts.start_time
+            while current + duration <= ts.end_time:
+                for court in courts:
+                    slots.append((current, current + duration, court))
+                current += duration
+    else:
+        start = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        for day_offset in range(30):
+            day_start = start + timedelta(days=day_offset)
+            for hour_offset in range(12):
+                slot_start = day_start + timedelta(minutes=30 * hour_offset)
+                slot_end = slot_start + duration
+                for court in courts:
+                    slots.append((slot_start, slot_end, court))
+
+    used_slots = set()
+    scheduled_matches = []
+
     for match in matches:
         if match.status == "bye":
             continue
-        day_offset = slot_idx // (len(courts) * 12)
-        time_offset = (slot_idx // len(courts)) % 12
-        court_idx = slot_idx % len(courts)
 
-        match.scheduled_time = start + timedelta(days=day_offset, minutes=30 * time_offset)
-        match.scheduled_end_time = match.scheduled_time + duration
-        match.court = courts[court_idx]
-        match.save(update_fields=["scheduled_time", "scheduled_end_time", "court"])
-        slot_idx += 1
+        t1 = match.team1
+        t2 = match.team2
+        t1_prefs = set(t1.preferred_courts.values_list("id", flat=True)) if t1 else set()
+        t2_prefs = set(t2.preferred_courts.values_list("id", flat=True)) if t2 else set()
+        mutual_prefs = t1_prefs & t2_prefs
+        any_prefs = t1_prefs | t2_prefs
+
+        assigned = False
+        # Try mutual preferred courts first
+        if mutual_prefs:
+            for start_t, end_t, court in slots:
+                slot_key = (start_t, court.id)
+                if slot_key in used_slots:
+                    continue
+                if _has_team_conflict(t1, t2, start_t, end_t, used_slots, scheduled_matches):
+                    continue
+                if court.id in mutual_prefs:
+                    match.scheduled_time = start_t
+                    match.scheduled_end_time = end_t
+                    match.court = court
+                    used_slots.add(slot_key)
+                    assigned = True
+                    break
+
+        # Try any preferred court
+        if not assigned and any_prefs:
+            for start_t, end_t, court in slots:
+                slot_key = (start_t, court.id)
+                if slot_key in used_slots:
+                    continue
+                if _has_team_conflict(t1, t2, start_t, end_t, used_slots, scheduled_matches):
+                    continue
+                if court.id in any_prefs:
+                    match.scheduled_time = start_t
+                    match.scheduled_end_time = end_t
+                    match.court = court
+                    used_slots.add(slot_key)
+                    assigned = True
+                    break
+
+        # Fallback to any available slot
+        if not assigned:
+            for start_t, end_t, court in slots:
+                slot_key = (start_t, court.id)
+                if slot_key in used_slots:
+                    continue
+                if _has_team_conflict(t1, t2, start_t, end_t, used_slots, scheduled_matches):
+                    continue
+                match.scheduled_time = start_t
+                match.scheduled_end_time = end_t
+                match.court = court
+                used_slots.add(slot_key)
+                assigned = True
+                break
+
+        if assigned:
+            match.save(update_fields=["scheduled_time", "scheduled_end_time", "court"])
+        scheduled_matches.append(match)
 
 
 def _assign_schedule_to_existing(tournament):
-    """Assign schedule to all upcoming matches of a tournament."""
-    matches = list(tournament.matches.filter(status="upcoming").order_by("group", "round_number", "match_number"))
+    """Assign schedule to all upcoming matches of a tournament, respecting preferences."""
+    matches = list(tournament.matches.filter(status="upcoming").select_related(
+        "team1", "team2"
+    ).order_by("group", "round_number", "match_number"))
     courts = list(tournament.courts.filter(is_available=True))
     if not courts or not matches:
         return
 
+    time_slots = list(tournament.time_slots.order_by("start_time"))
     duration = timedelta(minutes=tournament.default_match_duration)
-    start = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
-    slot_idx = 0
+    # Build available slots
+    slots = []
+    if time_slots:
+        for ts in time_slots:
+            current = ts.start_time
+            while current + duration <= ts.end_time:
+                for court in courts:
+                    slots.append((current, current + duration, court))
+                current += duration
+    else:
+        start = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        for day_offset in range(30):
+            day_start = start + timedelta(days=day_offset)
+            for hour_offset in range(12):
+                slot_start = day_start + timedelta(minutes=30 * hour_offset)
+                slot_end = slot_start + duration
+                for court in courts:
+                    slots.append((slot_start, slot_end, court))
+
+    used_slots = set()
+    scheduled_matches = []
+
     for match in matches:
-        day_offset = slot_idx // (len(courts) * 12)
-        time_offset = (slot_idx // len(courts)) % 12
-        court_idx = slot_idx % len(courts)
+        t1 = match.team1
+        t2 = match.team2
+        t1_prefs = set(t1.preferred_courts.values_list("id", flat=True)) if t1 else set()
+        t2_prefs = set(t2.preferred_courts.values_list("id", flat=True)) if t2 else set()
+        mutual_prefs = t1_prefs & t2_prefs
+        any_prefs = t1_prefs | t2_prefs
 
-        match.scheduled_time = start + timedelta(days=day_offset, minutes=30 * time_offset)
-        match.scheduled_end_time = match.scheduled_time + duration
-        match.court = courts[court_idx]
-        match.save(update_fields=["scheduled_time", "scheduled_end_time", "court"])
-        slot_idx += 1
+        assigned = False
+        # Try mutual preferred courts first
+        if mutual_prefs:
+            for start_t, end_t, court in slots:
+                slot_key = (start_t, court.id)
+                if slot_key in used_slots:
+                    continue
+                if _has_team_conflict(t1, t2, start_t, end_t, used_slots, scheduled_matches):
+                    continue
+                if court.id in mutual_prefs:
+                    match.scheduled_time = start_t
+                    match.scheduled_end_time = end_t
+                    match.court = court
+                    used_slots.add(slot_key)
+                    assigned = True
+                    break
+
+        # Try any preferred court
+        if not assigned and any_prefs:
+            for start_t, end_t, court in slots:
+                slot_key = (start_t, court.id)
+                if slot_key in used_slots:
+                    continue
+                if _has_team_conflict(t1, t2, start_t, end_t, used_slots, scheduled_matches):
+                    continue
+                if court.id in any_prefs:
+                    match.scheduled_time = start_t
+                    match.scheduled_end_time = end_t
+                    match.court = court
+                    used_slots.add(slot_key)
+                    assigned = True
+                    break
+
+        # Fallback to any available slot
+        if not assigned:
+            for start_t, end_t, court in slots:
+                slot_key = (start_t, court.id)
+                if slot_key in used_slots:
+                    continue
+                if _has_team_conflict(t1, t2, start_t, end_t, used_slots, scheduled_matches):
+                    continue
+                match.scheduled_time = start_t
+                match.scheduled_end_time = end_t
+                match.court = court
+                used_slots.add(slot_key)
+                assigned = True
+                break
+
+        if assigned:
+            match.save(update_fields=["scheduled_time", "scheduled_end_time", "court"])
+        scheduled_matches.append(match)

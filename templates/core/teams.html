@@ -10,6 +10,7 @@
         <thead>
             <tr>
                 <th>Name</th>
+                <th>Players</th>
                 {% if tournament.format == "hybrid" %}<th>Group</th>{% endif %}
                 <th>Status</th>
                 <th>Username</th>
@@ -20,13 +21,16 @@
             {% for t in teams %}
             <tr>
                 <td><strong>{{ t.name }}</strong></td>
+                <td style="font-size:0.85rem;color:#666;">
+                    {% for p in t.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% empty %}-{% endfor %}
+                </td>
                 {% if tournament.format == "hybrid" %}<td>{{ t.group|default:"-" }}</td>{% endif %}
                 <td><span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span></td>
                 <td class="text-muted">{{ t.user.username }}</td>
                 <td><a href="{% url 'team_detail' pk=t.pk %}" class="btn btn-outline btn-sm">View</a></td>
             </tr>
             {% empty %}
-            <tr><td colspan="5" class="text-center text-muted">No teams registered.</td></tr>
+            <tr><td colspan="6" class="text-center text-muted">No teams registered.</td></tr>
             {% endfor %}
         </tbody>
     </table>

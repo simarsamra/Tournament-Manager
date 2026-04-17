@@ -32,6 +32,19 @@
     </div>
 </div>
 
+{% if players %}
+<div class="card mb-2">
+    <div class="card-header">Players ({{ players.count }})</div>
+    <div class="card-body">
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">
+            {% for player in players %}
+            <span style="background:#e8f4fd;padding:0.35rem 0.75rem;border-radius:20px;font-size:0.85rem;">{{ player.name }}</span>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <div class="card">
     <div class="card-header">Match History</div>
     <div class="table-container">
