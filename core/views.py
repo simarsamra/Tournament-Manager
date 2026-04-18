@@ -24,7 +24,7 @@ from .forms import (
     ScoreSubmitForm, RescheduleForm, TeamPreferencesForm, BulkTeamForm,
     BulkTeamFileForm,
 )
-from .scheduling import generate_fixtures
+from .scheduling import generate_fixtures, generate_consolation_if_ready
 from .standings import calculate_standings, advance_winner, get_bracket_data, check_group_stage_complete
 from .withdrawals import handle_withdrawal
 from .backup import create_backup, validate_backup, restore_backup, list_backups, delete_backup
@@ -462,7 +462,7 @@ def confirm_score(request, pk):
         return redirect("match_detail", pk=pk)
     is_elimination = (
         tournament := match.tournament
-    ).format in ("knockout", "double_elimination") or (
+    ).format in ("knockout", "double_elimination", "consolation") or (
         tournament.format == "hybrid" and not match.group
     )
     if is_elimination and match.score_team1 == match.score_team2:
@@ -475,8 +475,10 @@ def confirm_score(request, pk):
     elif match.score_team2 > match.score_team1:
         match.winner = match.team2
     match.save()
-    if tournament.format in ("knockout", "double_elimination", "hybrid"):
+    if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
         advance_winner(match)
+    if tournament.format == "consolation":
+        generate_consolation_if_ready(tournament)
     if tournament.format == "hybrid" and match.group:
         check_group_stage_complete(tournament)
     log_action(request, "score_confirmed",
@@ -528,7 +530,7 @@ def resolve_dispute(request, pk):
             messages.error(request, "Scores cannot be negative.")
             return redirect("match_detail", pk=pk)
         tournament = match.tournament
-        is_elimination = tournament.format in ("knockout", "double_elimination") or (
+        is_elimination = tournament.format in ("knockout", "double_elimination", "consolation") or (
             tournament.format == "hybrid" and not match.group
         )
         if is_elimination and final_score1 == final_score2:
@@ -544,8 +546,10 @@ def resolve_dispute(request, pk):
             match.winner = match.team2
         match.notes += f"\nResolved by organizer."
         match.save()
-        if tournament.format in ("knockout", "double_elimination", "hybrid"):
+        if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
             advance_winner(match)
+        if tournament.format == "consolation":
+            generate_consolation_if_ready(tournament)
         if tournament.format == "hybrid" and match.group:
             check_group_stage_complete(tournament)
         log_action(request, "dispute_resolved",
@@ -645,7 +649,7 @@ def standings_view(request):
     if not tournament:
         return render(request, "core/standings.html", {})
     context = {"tournament": tournament}
-    if tournament.format in ("round_robin", "hybrid"):
+    if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
         if tournament.format == "hybrid":
             groups = sorted(set(
                 tournament.teams.exclude(group="").values_list("group", flat=True)
@@ -659,7 +663,7 @@ def standings_view(request):
                 context["bracket"] = get_bracket_data(tournament)
         else:
             context["standings"] = calculate_standings(tournament)
-    if tournament.format in ("knockout", "double_elimination"):
+    if tournament.format in ("knockout", "double_elimination", "consolation"):
         context["bracket"] = get_bracket_data(tournament)
     return render(request, "core/standings.html", context)
 
@@ -802,7 +806,7 @@ def analytics_view(request):
         "team_stats": team_stats, "schedule_density": json.dumps(schedule_density),
         "withdrawal_info": withdrawal_info, "recent_logs": recent_logs,
     }
-    if tournament.format in ("round_robin", "hybrid"):
+    if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
         context["standings"] = calculate_standings(tournament)
     return render(request, "core/analytics.html", context)
 
@@ -939,7 +943,7 @@ def public_standings(request):
     if not tournament:
         return render(request, "core/public_standings.html", {})
     context = {"tournament": tournament}
-    if tournament.format in ("round_robin", "hybrid"):
+    if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
         if tournament.format == "hybrid":
             groups = sorted(set(tournament.teams.exclude(group="").values_list("group", flat=True)))
             context["group_standings"] = {g: calculate_standings(tournament, group=g) for g in groups}
@@ -948,7 +952,7 @@ def public_standings(request):
                 context["bracket"] = get_bracket_data(tournament)
         else:
             context["standings"] = calculate_standings(tournament)
-    if tournament.format in ("knockout", "double_elimination"):
+    if tournament.format in ("knockout", "double_elimination", "consolation"):
         context["bracket"] = get_bracket_data(tournament)
     return render(request, "core/public_standings.html", context)
 

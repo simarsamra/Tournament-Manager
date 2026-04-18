@@ -7,8 +7,10 @@ from django.utils import timezone
 class Tournament(models.Model):
     FORMAT_CHOICES = [
         ("round_robin", "Round Robin"),
+        ("double_round_robin", "Double Round Robin"),
         ("knockout", "Knockout"),
         ("double_elimination", "Double Elimination"),
+        ("consolation", "Consolation"),
         ("hybrid", "Hybrid (Groups + Knockout)"),
     ]
     SPORT_CHOICES = [

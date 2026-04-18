@@ -30,8 +30,12 @@ def handle_withdrawal(request, team, tournament):
             match.save(update_fields=["status", "winner", "notes"])
 
             # Advance opponent in knockout brackets
-            if tournament.format in ("knockout", "double_elimination", "hybrid"):
+            if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
                 advance_winner(match)
+            if tournament.format == "consolation":
+                from .scheduling import generate_consolation_if_ready
+
+                generate_consolation_if_ready(tournament)
         elif policy == "void":
             match.status = "cancelled"
             match.notes = f"{team.name} withdrew - match voided"

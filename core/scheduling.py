@@ -2,6 +2,7 @@
 import math
 import itertools
 from datetime import timedelta
+from django.db import models
 from django.utils import timezone
 from .models import Match, Court, TimeSlot, Team
 
@@ -40,6 +41,56 @@ def generate_round_robin(tournament):
                 "match_number": match_num,
             })
             match_num += 1
+
+    _assign_schedule(tournament, matches_data)
+
+
+def generate_double_round_robin(tournament):
+    """Generate home-and-away round-robin fixtures."""
+    teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+    n = len(teams)
+    if n < 2:
+        return
+
+    first_leg = []
+    if n % 2 == 1:
+        teams.append(None)  # bye placeholder
+        n += 1
+
+    fixed = teams[0]
+    rotating = teams[1:]
+    match_num = 1
+
+    for round_idx in range(n - 1):
+        round_pairs = [(fixed, rotating[0])]
+        for i in range(1, n // 2):
+            round_pairs.append((rotating[i], rotating[n - 1 - i]))
+        rotating = [rotating[-1]] + rotating[:-1]
+
+        for t1, t2 in round_pairs:
+            if t1 is None or t2 is None:
+                continue
+            first_leg.append((t1, t2, round_idx + 1))
+
+    matches_data = []
+    for t1, t2, round_no in first_leg:
+        matches_data.append({
+            "team1": t1,
+            "team2": t2,
+            "round_number": round_no,
+            "match_number": match_num,
+        })
+        match_num += 1
+
+    round_offset = n - 1
+    for t1, t2, round_no in first_leg:
+        matches_data.append({
+            "team1": t2,
+            "team2": t1,
+            "round_number": round_no + round_offset,
+            "match_number": match_num,
+        })
+        match_num += 1
 
     _assign_schedule(tournament, matches_data)
 
@@ -215,6 +266,49 @@ def generate_double_elimination(tournament):
     # Losers bracket matches are created dynamically as teams are eliminated
 
 
+def generate_consolation(tournament):
+    """Generate main knockout bracket; consolation is generated after round 1 completes."""
+    teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+    generate_knockout(tournament, teams=teams, bracket_type="winners")
+
+
+def generate_consolation_if_ready(tournament):
+    """Generate consolation bracket from first-round losers once round 1 is complete."""
+    if tournament.format != "consolation":
+        return False
+    if tournament.matches.filter(bracket_type="consolation").exists():
+        return False
+
+    first_round = tournament.matches.filter(bracket_type="winners", round_number=1)
+    if not first_round.exists():
+        return False
+
+    incomplete = first_round.exclude(status__in=["confirmed", "forfeited", "cancelled", "bye"])
+    if incomplete.exists():
+        return False
+
+    losers = []
+    for match in first_round:
+        if not match.team1_id or not match.team2_id or not match.winner_id:
+            continue
+        if match.winner_id == match.team1_id:
+            losers.append(match.team2)
+        elif match.winner_id == match.team2_id:
+            losers.append(match.team1)
+
+    if len(losers) < 2:
+        return False
+
+    max_match = tournament.matches.aggregate(m=models.Max("match_number"))["m"] or 0
+    generate_knockout(
+        tournament,
+        teams=losers,
+        start_match=max_match + 1,
+        bracket_type="consolation",
+    )
+    return True
+
+
 def generate_fixtures(tournament):
     """Main entry point for fixture generation."""
     # Clear existing matches
@@ -224,10 +318,14 @@ def generate_fixtures(tournament):
     fmt = tournament.format
     if fmt == "round_robin":
         generate_round_robin(tournament)
+    elif fmt == "double_round_robin":
+        generate_double_round_robin(tournament)
     elif fmt == "knockout":
         generate_knockout(tournament)
     elif fmt == "double_elimination":
         generate_double_elimination(tournament)
+    elif fmt == "consolation":
+        generate_consolation(tournament)
     elif fmt == "hybrid":
         generate_hybrid(tournament)
 
