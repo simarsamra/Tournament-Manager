@@ -405,6 +405,7 @@ def match_detail(request, pk):
     can_submit = is_participant and match.status in ("upcoming", "in_progress")
     can_confirm = (is_participant and match.status == "pending_confirmation" and match.submitted_by != team)
     can_dispute = can_confirm
+    can_mark_no_show = _is_organizer(request.user) and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress")
     return render(request, "core/match_detail.html", {
         "match": match,
         "team": team,
@@ -412,6 +413,7 @@ def match_detail(request, pk):
         "can_submit": can_submit,
         "can_confirm": can_confirm,
         "can_dispute": can_dispute,
+        "can_mark_no_show": can_mark_no_show,
         "score_form": ScoreSubmitForm(),
         "reschedule_form": RescheduleForm(tournament=match.tournament),
         "reschedule_requests": match.reschedule_requests.order_by("-created_at"),
@@ -708,12 +710,77 @@ def team_detail(request, pk):
 def withdraw_team(request, pk):
     team = get_object_or_404(Team, pk=pk)
     user_team = _get_team(request.user)
+    is_organizer = _is_organizer(request.user)
     if team != user_team and not _is_organizer(request.user):
         messages.error(request, "Not authorized.")
         return redirect("team_detail", pk=pk)
+    if team.status == "withdrawn":
+        messages.info(request, f"Team '{team.name}' is already withdrawn.")
+        return redirect("team_detail", pk=pk)
+
+    # Team self-withdrawal requires explicit confirmation + password check.
+    if team == user_team and not is_organizer:
+        if request.POST.get("confirm_withdraw") != "yes":
+            messages.error(request, "Please confirm withdrawal before continuing.")
+            return redirect("team_detail", pk=pk)
+        password = request.POST.get("password", "")
+        if not password or not request.user.check_password(password):
+            messages.error(request, "Incorrect password. Withdrawal cancelled.")
+            return redirect("team_detail", pk=pk)
+
     handle_withdrawal(request, team, team.tournament)
     messages.success(request, f"Team '{team.name}' has been withdrawn.")
     return redirect("teams")
+
+
+@login_required
+@require_POST
+def mark_no_show(request, pk):
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can mark no-shows.")
+        return redirect("match_detail", pk=pk)
+
+    match = get_object_or_404(Match, pk=pk)
+    if match.status not in ("upcoming", "in_progress", "pending_confirmation"):
+        messages.error(request, "No-show can only be recorded for active/upcoming matches.")
+        return redirect("match_detail", pk=pk)
+
+    no_show_team_id = request.POST.get("no_show_team")
+    if str(match.team1_id) == str(no_show_team_id):
+        loser = match.team1
+        winner = match.team2
+    elif str(match.team2_id) == str(no_show_team_id):
+        loser = match.team2
+        winner = match.team1
+    else:
+        messages.error(request, "Invalid team selected for no-show.")
+        return redirect("match_detail", pk=pk)
+
+    if not winner:
+        messages.error(request, "Cannot mark no-show: opponent not assigned.")
+        return redirect("match_detail", pk=pk)
+
+    match.status = "forfeited"
+    match.winner = winner
+    match.notes = (match.notes + "\n" if match.notes else "") + f"No-show: {loser.name}"
+    match.save(update_fields=["status", "winner", "notes"])
+
+    tournament = match.tournament
+    if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
+        advance_winner(match)
+    if tournament.format == "consolation":
+        generate_consolation_if_ready(tournament)
+    if tournament.format == "hybrid" and match.group:
+        check_group_stage_complete(tournament)
+
+    log_action(
+        request,
+        "match_no_show",
+        f"No-show recorded for {match}. Loser: {loser.name}, Winner: {winner.name}",
+        tournament=tournament,
+    )
+    messages.success(request, f"No-show recorded. {winner.name} wins by forfeit.")
+    return redirect("match_detail", pk=pk)
 
 
 @login_required

@@ -96,6 +96,28 @@
         </div>
         {% endif %}
 
+        <!-- No-Show (organizer) -->
+        {% if can_mark_no_show %}
+        <div class="card">
+            <div class="card-header">No-Show</div>
+            <div class="card-body">
+                <p class="mb-1">Mark a team as no-show. Opponent will win by forfeit.</p>
+                <div class="d-flex gap-1">
+                    <form method="post" action="{% url 'mark_no_show' pk=match.pk %}" style="display:inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="no_show_team" value="{{ match.team1.pk }}">
+                        <button type="submit" class="btn btn-danger" onclick="return confirm('Mark {{ match.team1.name }} as no-show?')">{{ match.team1.name }} No-Show</button>
+                    </form>
+                    <form method="post" action="{% url 'mark_no_show' pk=match.pk %}" style="display:inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="no_show_team" value="{{ match.team2.pk }}">
+                        <button type="submit" class="btn btn-danger" onclick="return confirm('Mark {{ match.team2.name }} as no-show?')">{{ match.team2.name }} No-Show</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Reschedule Request -->
         {% if is_participant and match.status == "upcoming" %}
         <div class="card">

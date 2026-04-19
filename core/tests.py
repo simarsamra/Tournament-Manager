@@ -553,6 +553,95 @@ class WithdrawalPolicyTests(TestCase):
 		open_slots_after = tournament.open_slots.count()
 		self.assertGreater(open_slots_after, open_slots_before)
 
+	def test_team_self_withdraw_requires_correct_password(self):
+		tournament = self._create_tournament(policy="forfeit")
+		team1 = self._create_team(tournament, "Team A", username="team_a", seed=1)
+		self._create_team(tournament, "Team B", username="team_b", seed=2)
+		generate_fixtures(tournament)
+
+		self.client.force_login(team1.user)
+		response = self.client.post(
+			reverse("withdraw_team", kwargs={"pk": team1.pk}),
+			{"confirm_withdraw": "yes", "password": "wrong-pass"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		team1.refresh_from_db()
+		self.assertEqual(team1.status, "active")
+		msgs = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("Incorrect password" in m for m in msgs))
+
+	def test_team_self_withdraw_with_password_succeeds(self):
+		tournament = self._create_tournament(policy="forfeit")
+		team1 = self._create_team(tournament, "Team A", username="team_a2", seed=1)
+		self._create_team(tournament, "Team B", username="team_b2", seed=2)
+		generate_fixtures(tournament)
+
+		self.client.force_login(team1.user)
+		response = self.client.post(
+			reverse("withdraw_team", kwargs={"pk": team1.pk}),
+			{"confirm_withdraw": "yes", "password": "pass123"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		team1.refresh_from_db()
+		self.assertEqual(team1.status, "withdrawn")
+
+	def test_organizer_can_withdraw_team_without_password(self):
+		tournament = self._create_tournament(policy="forfeit")
+		team1 = self._create_team(tournament, "Team A", username="team_a3", seed=1)
+		self._create_team(tournament, "Team B", username="team_b3", seed=2)
+		generate_fixtures(tournament)
+
+		self.client.force_login(self.organizer)
+		response = self.client.post(
+			reverse("withdraw_team", kwargs={"pk": team1.pk}),
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		team1.refresh_from_db()
+		self.assertEqual(team1.status, "withdrawn")
+
+	def test_organizer_mark_no_show_forfeits_match(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		team1 = self._create_team(tournament, "Team A", username="team_a4", seed=1)
+		team2 = self._create_team(tournament, "Team B", username="team_b4", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+
+		self.client.force_login(self.organizer)
+		response = self.client.post(
+			reverse("mark_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team1.pk)},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		match.refresh_from_db()
+		self.assertEqual(match.status, "forfeited")
+		self.assertEqual(match.winner, team2)
+
+	def test_team_cannot_mark_no_show(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		team1 = self._create_team(tournament, "Team A", username="team_a5", seed=1)
+		team2 = self._create_team(tournament, "Team B", username="team_b5", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+
+		self.client.force_login(team1.user)
+		response = self.client.post(
+			reverse("mark_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team2.pk)},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		match.refresh_from_db()
+		self.assertEqual(match.status, "upcoming")
+
 
 class TournamentLifecycleTests(TestCase):
 	"""Tests for end-to-end tournament lifecycle (organizer + team UI flows)."""
