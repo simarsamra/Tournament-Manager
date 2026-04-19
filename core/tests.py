@@ -607,6 +607,38 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(rr.new_time, slot.start_time)
 		self.assertEqual(rr.new_court, alt_court)
 
+	def test_match_detail_reschedule_shows_open_slot_date_in_list(self):
+		tournament = self._create_tournament(name="Readable Slot Picker")
+		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
+		alt_court = Court.objects.create(tournament=tournament, name="Alt", is_available=True)
+		team1 = self._create_team(tournament, "Slot A", username="slot_a_user")
+		team2 = self._create_team(tournament, "Slot B", username="slot_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=4,
+			team1=team1,
+			team2=team2,
+			court=primary_court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		slot = OpenSlot.objects.create(
+			tournament=tournament,
+			court=alt_court,
+			start_time=timezone.now() + timedelta(days=4, hours=2),
+			end_time=timezone.now() + timedelta(days=4, hours=2, minutes=30),
+			reason="Readable slot",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.get(reverse("match_detail", kwargs={"pk": match.pk}))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'type="radio"')
+		self.assertContains(response, alt_court.name)
+		self.assertContains(response, timezone.localtime(slot.start_time).strftime("%b %d, %Y"))
+
 	def test_knockout_disallows_draw_on_confirm(self):
 		tournament = self._create_tournament(fmt="knockout")
 		team1 = self._create_team(tournament, "Red", seed=1)

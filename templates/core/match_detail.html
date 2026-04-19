@@ -126,7 +126,19 @@
                 <form method="post" action="{% url 'request_reschedule' pk=match.pk %}">
                     {% csrf_token %}
                     <div class="form-group">
-                        <label>Choose Open Slot</label>{{ reschedule_form.open_slot }}
+                        <label>Choose Open Slot</label>
+                        {% if reschedule_form.open_slot.field.queryset %}
+                        <div class="slot-picker">
+                            {% for radio in reschedule_form.open_slot %}
+                            <label class="slot-option" for="{{ radio.id_for_label }}">
+                                <span class="slot-option-input">{{ radio.tag }}</span>
+                                <span class="slot-option-content">{{ radio.choice_label }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <div class="empty-state">No open slots are available right now. Use the manual date, time, and court fields below.</div>
+                        {% endif %}
                         <small class="text-muted">Pick a free slot directly, or leave this blank and enter a manual date/time below.</small>
                     </div>
                     <div class="grid grid-2">

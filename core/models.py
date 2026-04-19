@@ -301,7 +301,9 @@ class OpenSlot(models.Model):
         ordering = ["start_time"]
 
     def __str__(self):
-        return f"{self.court.name}: {self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
+        start = timezone.localtime(self.start_time)
+        end = timezone.localtime(self.end_time)
+        return f"{self.court.name} · {start.strftime('%a, %b %d, %Y %H:%M')} - {end.strftime('%H:%M')}"
 
 
 class AuditLog(models.Model):

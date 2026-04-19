@@ -199,8 +199,8 @@ class RescheduleForm(forms.Form):
     open_slot = forms.ModelChoiceField(
         queryset=OpenSlot.objects.none(),
         required=False,
-        empty_label="Select an available open slot",
-        widget=forms.Select(attrs={"class": "form-select"}),
+        empty_label=None,
+        widget=forms.RadioSelect(),
     )
     new_date = forms.DateField(
         required=False,
@@ -222,6 +222,10 @@ class RescheduleForm(forms.Form):
 
     def __init__(self, *args, tournament=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["open_slot"].label_from_instance = lambda slot: (
+            f"{timezone.localtime(slot.start_time).strftime('%a, %b %d, %Y · %H:%M')} - "
+            f"{timezone.localtime(slot.end_time).strftime('%H:%M')} · {slot.court.name}"
+        )
         if tournament:
             self.fields["open_slot"].queryset = OpenSlot.objects.filter(
                 tournament=tournament,
