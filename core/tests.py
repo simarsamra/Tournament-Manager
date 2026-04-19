@@ -474,6 +474,42 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(match.scheduled_end_time.hour, 12)
 		self.assertEqual(match.scheduled_end_time.minute, 30)
 
+	def test_generate_fixtures_prevents_same_team_multiple_matches_on_same_day(self):
+		tournament = self._create_tournament(name="No Same Day Double Booking")
+		start_date = timezone.localdate() + timedelta(days=1)
+		tournament.start_date = start_date
+		tournament.save(update_fields=["start_date"])
+		court1 = Court.objects.create(tournament=tournament, name="FOF1", is_available=True)
+		court2 = Court.objects.create(tournament=tournament, name="MOF2", is_available=True)
+
+		for court in (court1, court2):
+			for day_offset in range(6):
+				day = start_date + timedelta(days=day_offset)
+				CourtAvailability.objects.create(
+					court=court,
+					weekday=day.weekday(),
+					start_time="12:00",
+					end_time="13:00",
+					start_date=day,
+					end_date=day,
+				)
+
+		teams = [self._create_team(tournament, f"Team{i}", seed=i) for i in range(1, 5)]
+		for team in teams:
+			Player.objects.create(team=team, name=f"{team.name} Player")
+			team.preferred_courts.add(court1, court2)
+
+		generate_fixtures(tournament)
+
+		for team in teams:
+			seen_days = set()
+			team_matches = tournament.matches.filter(models.Q(team1=team) | models.Q(team2=team))
+			for match in team_matches:
+				self.assertIsNotNone(match.scheduled_time)
+				match_day = timezone.localtime(match.scheduled_time).date()
+				self.assertNotIn(match_day, seen_days, f"{team.name} was scheduled twice on {match_day}")
+				seen_days.add(match_day)
+
 	def test_knockout_disallows_draw_on_confirm(self):
 		tournament = self._create_tournament(fmt="knockout")
 		team1 = self._create_team(tournament, "Red", seed=1)

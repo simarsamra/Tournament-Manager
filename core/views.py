@@ -891,6 +891,16 @@ def request_reschedule(request, pk):
         if conflicts.exists():
             messages.error(request, "The selected slot has a conflict.")
             return redirect("match_detail", pk=pk)
+
+        same_day_team_conflicts = Match.objects.filter(
+            tournament=match.tournament,
+            scheduled_time__date=new_dt.date(),
+        ).filter(
+            Q(team1=match.team1) | Q(team2=match.team1) | Q(team1=match.team2) | Q(team2=match.team2)
+        ).exclude(pk=match.pk).exclude(status__in=["cancelled", "forfeited", "bye"])
+        if same_day_team_conflicts.exists():
+            messages.error(request, "A team in this match already has another match scheduled on that day.")
+            return redirect("match_detail", pk=pk)
         RescheduleRequest.objects.create(
             match=match, requested_by=team, new_time=new_dt,
             new_court=new_court, reason=form.cleaned_data.get("reason", ""),

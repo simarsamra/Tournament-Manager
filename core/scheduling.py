@@ -399,12 +399,27 @@ def _assign_schedule(tournament, matches_data):
 
 
 def _has_team_conflict(t1, t2, start, end, used_slots, pending_matches):
-    """Check if either team is already scheduled at this time."""
+    """Check if either team is already scheduled at this time or on the same day."""
+    target_day = timezone.localtime(start).date() if timezone.is_aware(start) else start.date()
+
     for m in pending_matches:
-        if m.scheduled_time and m.scheduled_end_time:
-            if start < m.scheduled_end_time and end > m.scheduled_time:
-                if m.team1 in (t1, t2) or m.team2 in (t1, t2):
-                    return True
+        if not m.scheduled_time:
+            continue
+
+        match_day = (
+            timezone.localtime(m.scheduled_time).date()
+            if timezone.is_aware(m.scheduled_time)
+            else m.scheduled_time.date()
+        )
+        same_team = m.team1 in (t1, t2) or m.team2 in (t1, t2)
+        if not same_team:
+            continue
+
+        if match_day == target_day:
+            return True
+
+        if m.scheduled_end_time and start < m.scheduled_end_time and end > m.scheduled_time:
+            return True
     return False
 
 
