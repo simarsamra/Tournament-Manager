@@ -157,6 +157,30 @@ def _validate_tournament_ready(tournament):
     return errors
 
 
+def _create_open_slot_for_completed_match(match, reason):
+    """Create an open slot if a scheduled match finished before its reserved slot ended."""
+    if not match.scheduled_time or not match.court:
+        return None
+
+    slot_end = match.scheduled_end_time or match.scheduled_time
+    now = timezone.now()
+    if slot_end <= now:
+        return None
+
+    slot_start = match.scheduled_time if match.scheduled_time > now else now
+    if slot_end <= slot_start:
+        return None
+
+    slot, _ = OpenSlot.objects.get_or_create(
+        tournament=match.tournament,
+        court=match.court,
+        start_time=slot_start,
+        end_time=slot_end,
+        defaults={"reason": reason},
+    )
+    return slot
+
+
 # -- Auth Views --
 
 def login_view(request):
@@ -779,6 +803,7 @@ def confirm_score(request, pk):
     elif match.score_team2 > match.score_team1:
         match.winner = match.team2
     match.save()
+    _create_open_slot_for_completed_match(match, f"Completed early: {match}")
     if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
         advance_winner(match)
     if tournament.format == "consolation":
@@ -850,6 +875,7 @@ def resolve_dispute(request, pk):
             match.winner = match.team2
         match.notes += f"\nResolved by organizer."
         match.save()
+        _create_open_slot_for_completed_match(match, f"Completed early after dispute: {match}")
         if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
             advance_winner(match)
         if tournament.format == "consolation":
@@ -1082,6 +1108,7 @@ def mark_no_show(request, pk):
     match.winner = winner
     match.notes = (match.notes + "\n" if match.notes else "") + f"No-show: {loser.name}"
     match.save(update_fields=["status", "winner", "notes"])
+    _create_open_slot_for_completed_match(match, f"Completed early by no-show: {match}")
 
     tournament = match.tournament
     if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):

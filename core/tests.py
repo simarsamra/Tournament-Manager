@@ -510,6 +510,42 @@ class UXAndLogicRegressionTests(TestCase):
 				self.assertNotIn(match_day, seen_days, f"{team.name} was scheduled twice on {match_day}")
 				seen_days.add(match_day)
 
+	def test_confirming_match_ahead_of_schedule_creates_open_slot(self):
+		tournament = self._create_tournament(name="Early Finish Opens Slot")
+		court = Court.objects.create(tournament=tournament, name="Court 1", is_available=True)
+		team1 = self._create_team(tournament, "Alpha", username="alpha_open_slot")
+		team2 = self._create_team(tournament, "Beta", username="beta_open_slot")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=1,
+			team1=team1,
+			team2=team2,
+			court=court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+
+		self.client.force_login(team1.user)
+		submit_response = self.client.post(
+			reverse("submit_score", kwargs={"pk": match.pk}),
+			{"score_team1": 3, "score_team2": 1, "notes": "Played early"},
+			follow=True,
+		)
+		self.assertEqual(submit_response.status_code, 200)
+
+		self.client.force_login(team2.user)
+		confirm_response = self.client.post(reverse("confirm_score", kwargs={"pk": match.pk}), follow=True)
+
+		self.assertEqual(confirm_response.status_code, 200)
+		match.refresh_from_db()
+		self.assertEqual(match.status, "confirmed")
+		self.assertEqual(tournament.open_slots.count(), 1)
+		slot = tournament.open_slots.first()
+		self.assertEqual(slot.court, court)
+		self.assertEqual(slot.start_time, match.scheduled_time)
+		self.assertEqual(slot.end_time, match.scheduled_end_time)
+
 	def test_knockout_disallows_draw_on_confirm(self):
 		tournament = self._create_tournament(fmt="knockout")
 		team1 = self._create_team(tournament, "Red", seed=1)
