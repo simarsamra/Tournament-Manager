@@ -187,10 +187,13 @@ def register_view(request, pk=None):
     if tournament is None and open_tournaments.count() == 1:
         tournament = open_tournaments.first()
 
+    available_courts = tournament.courts.filter(is_available=True).order_by("name") if tournament else Court.objects.none()
+
     if not tournament:
         return render(request, "core/register.html", {
             "form": TeamRegistrationForm(),
             "open_tournaments": open_tournaments,
+            "available_courts": available_courts,
         })
 
     if tournament.status != "registration_open":
@@ -201,6 +204,7 @@ def register_view(request, pk=None):
             "players_per_team": tournament.players_per_team if tournament else 1,
             "registration_closed": True,
             "open_tournaments": open_tournaments,
+            "available_courts": available_courts,
         })
 
     if request.method == "POST":
@@ -214,6 +218,7 @@ def register_view(request, pk=None):
                     "tournament": tournament,
                     "players_per_team": tournament.players_per_team if tournament else 1,
                     "open_tournaments": open_tournaments,
+                    "available_courts": available_courts,
                 })
             user = User.objects.create_user(
                 username=form.cleaned_data["username"],
@@ -243,6 +248,7 @@ def register_view(request, pk=None):
         "tournament": tournament,
         "players_per_team": tournament.players_per_team if tournament else 1,
         "open_tournaments": open_tournaments,
+        "available_courts": available_courts,
     })
 
 
@@ -349,6 +355,8 @@ def add_court(request, pk):
     if form.is_valid():
         court = form.save(commit=False)
         court.tournament = tournament
+        if "availability_present" not in request.POST:
+            court.is_available = True
         court.save()
         log_action(request, "court_added", f"Court '{court.name}' added", tournament=tournament)
         messages.success(request, f"Court '{court.name}' added.")
@@ -402,6 +410,9 @@ def add_court_availability(request, pk):
                 existing_keys.add(key)
 
         created_count = len(to_create)
+        if is_active and courts:
+            Court.objects.filter(id__in=[court.id for court in courts]).update(is_available=True)
+
         if to_create:
             CourtAvailability.objects.bulk_create(to_create)
             log_action(

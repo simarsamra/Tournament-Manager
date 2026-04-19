@@ -13,7 +13,7 @@
         {% if tournament.players_per_team > 1 %}
         <p class="text-muted mb-2">Each team requires <strong>{{ tournament.players_per_team }}</strong> players.</p>
         {% endif %}
-        <form method="post">
+        <form method="post" id="registration-form">
             {% csrf_token %}
             <div class="form-group">
                 <label for="{{ form.team_name.id_for_label }}">{{ form.team_name.label }}</label>
@@ -43,14 +43,34 @@
             </div>
             <div class="form-group">
                 <label>Preferred Courts</label>
-                {{ form.preferred_courts }}
+                {% if available_courts %}
+                    {{ form.preferred_courts }}
+                {% else %}
+                    <div class="alert alert-warning" style="margin-bottom:0.5rem;">No preferred courts are available yet. The organizer needs to mark courts as available first.</div>
+                {% endif %}
                 <small class="text-muted">{{ form.preferred_courts.help_text }}</small>
                 {% if form.preferred_courts.errors %}<small class="text-danger">{{ form.preferred_courts.errors.0 }}</small>{% endif %}
+            </div>
+            <div class="card" style="margin:1rem 0;background:#f8f9fa;">
+                <div class="card-header">Review before registering</div>
+                <div class="card-body" style="font-size:0.9rem;">
+                    <div><strong>Team:</strong> <span data-preview="team_name">-</span></div>
+                    <div><strong>Captain username:</strong> <span data-preview="username">-</span></div>
+                    <div><strong>Players entered:</strong> <span data-preview="player_count">0</span></div>
+                    <div><strong>Preferred courts:</strong> <span data-preview="preferred_courts">None selected</span></div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="d-flex align-center" style="gap:0.5rem;">
+                    {{ form.confirm_registration }}
+                    <span>I confirm the above information is correct.</span>
+                </label>
+                {% if form.confirm_registration.errors %}<small class="text-danger">{{ form.confirm_registration.errors.0 }}</small>{% endif %}
             </div>
             {% if form.non_field_errors %}
             <div class="alert alert-error">{{ form.non_field_errors.0 }}</div>
             {% endif %}
-            <button type="submit" class="btn btn-primary btn-lg" style="width:100%">Register Team</button>
+            <button type="submit" class="btn btn-primary btn-lg" style="width:100%" onclick="return confirm('Please confirm that your team details are correct before submitting.')">Register Team</button>
         </form>
         {% endif %}
         {% elif open_tournaments %}

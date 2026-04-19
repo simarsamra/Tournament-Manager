@@ -56,6 +56,7 @@ class UXAndLogicRegressionTests(TestCase):
 				"password": "abc12345",
 				"password_confirm": "abc12345",
 				"player_names": "Alice",
+				"confirm_registration": "on",
 			},
 		)
 
@@ -160,6 +161,72 @@ class UXAndLogicRegressionTests(TestCase):
 		messages = [str(m) for m in response.context["messages"]]
 		self.assertTrue(any("End time must be after start time" in m for m in messages))
 
+	def test_add_court_defaults_to_available_and_shows_on_registration(self):
+		tournament = self._create_tournament(name="Availability Default")
+		tournament.status = "registration_open"
+		tournament.save(update_fields=["status"])
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("add_court", kwargs={"pk": tournament.pk}),
+			{"name": "Center Court"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		court = Court.objects.get(tournament=tournament, name="Center Court")
+		self.assertTrue(court.is_available)
+		self.client.logout()
+
+		register_response = self.client.get(
+			reverse("tournament_register", kwargs={"pk": tournament.pk})
+		)
+		self.assertEqual(register_response.status_code, 200)
+		self.assertContains(register_response, "Center Court")
+
+	def test_active_availability_marks_court_available(self):
+		tournament = self._create_tournament(name="Availability Reactivate")
+		court = Court.objects.create(tournament=tournament, name="Court A", is_available=False)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			{
+				"courts": [str(court.pk)],
+				"weekdays": ["1"],
+				"start_time": "09:00",
+				"end_time": "11:00",
+				"is_active": "on",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		court.refresh_from_db()
+		self.assertTrue(court.is_available)
+
+	def test_registration_requires_confirmation_checkbox(self):
+		open_tournament = self._create_tournament(name="Confirmed Entry")
+		open_tournament.status = "registration_open"
+		open_tournament.save(update_fields=["status"])
+		court = Court.objects.create(tournament=open_tournament, name="Court A", is_available=True)
+
+		response = self.client.post(
+			reverse("tournament_register", kwargs={"pk": open_tournament.pk}),
+			{
+				"team_name": "Joiners",
+				"username": "joiners_user_blocked",
+				"password": "abc12345",
+				"password_confirm": "abc12345",
+				"player_names": "Alice",
+				"preferred_courts": [str(court.pk)],
+			},
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertFalse(Team.objects.filter(tournament=open_tournament, name="Joiners").exists())
+		self.assertContains(response, "Please confirm that the team information is correct")
+
 	def test_organizer_can_delete_tournament(self):
 		tournament = self._create_tournament(name="Delete Me")
 		self.client.force_login(self.organizer)
@@ -262,6 +329,7 @@ class UXAndLogicRegressionTests(TestCase):
 				"password_confirm": "abc12345",
 				"player_names": "Alice",
 				"preferred_courts": [str(court.pk)],
+				"confirm_registration": "on",
 			},
 			follow=True,
 		)

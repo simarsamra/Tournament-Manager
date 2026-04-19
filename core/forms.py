@@ -39,6 +39,11 @@ class CourtForm(forms.ModelForm):
             "is_available": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["is_available"].required = False
+        self.fields["is_available"].initial = True
+
 
 class TimeSlotForm(forms.Form):
     court = forms.ModelChoiceField(
@@ -132,14 +137,25 @@ class TeamRegistrationForm(forms.Form):
         widget=forms.CheckboxSelectMultiple(),
         help_text="Select at least one preferred court when options are available.",
     )
+    confirm_registration = forms.BooleanField(
+        required=True,
+        error_messages={
+            "required": "Please confirm that the team information is correct before registering.",
+        },
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
 
     def __init__(self, *args, tournament=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.tournament = tournament
         if tournament:
-            courts = Court.objects.filter(tournament=tournament, is_available=True)
+            courts = Court.objects.filter(tournament=tournament, is_available=True).order_by("name")
             self.fields["preferred_courts"].queryset = courts
             self.fields["preferred_courts"].required = courts.exists()
+            if courts.exists():
+                self.fields["preferred_courts"].help_text = "Select the courts your team prefers for scheduled matches."
+            else:
+                self.fields["preferred_courts"].help_text = "No courts are currently available for preference selection yet."
 
     def clean(self):
         cleaned = super().clean()

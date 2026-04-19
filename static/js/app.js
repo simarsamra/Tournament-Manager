@@ -54,4 +54,52 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         });
     });
+
+    // Live registration review summary
+    const registrationForm = document.querySelector('#registration-form');
+    if (registrationForm) {
+        const teamInput = registrationForm.querySelector('[name="team_name"]');
+        const usernameInput = registrationForm.querySelector('[name="username"]');
+        const playersInput = registrationForm.querySelector('[name="player_names"]');
+        const preferredInputs = registrationForm.querySelectorAll('[name="preferred_courts"]');
+
+        const updateRegistrationPreview = function() {
+            const teamTarget = document.querySelector('[data-preview="team_name"]');
+            const usernameTarget = document.querySelector('[data-preview="username"]');
+            const playerCountTarget = document.querySelector('[data-preview="player_count"]');
+            const courtsTarget = document.querySelector('[data-preview="preferred_courts"]');
+
+            if (teamTarget) {
+                teamTarget.textContent = teamInput && teamInput.value.trim() ? teamInput.value.trim() : '-';
+            }
+            if (usernameTarget) {
+                usernameTarget.textContent = usernameInput && usernameInput.value.trim() ? usernameInput.value.trim() : '-';
+            }
+            if (playerCountTarget) {
+                const players = playersInput && playersInput.value
+                    ? playersInput.value.split('\n').map(function(name) { return name.trim(); }).filter(Boolean)
+                    : [];
+                playerCountTarget.textContent = String(players.length);
+            }
+            if (courtsTarget) {
+                const selectedCourts = Array.from(preferredInputs)
+                    .filter(function(input) { return input.checked; })
+                    .map(function(input) {
+                        const label = registrationForm.querySelector('label[for="' + input.id + '"]');
+                        return label ? label.textContent.trim() : input.value;
+                    });
+                courtsTarget.textContent = selectedCourts.length ? selectedCourts.join(', ') : 'None selected';
+            }
+        };
+
+        [teamInput, usernameInput, playersInput].forEach(function(input) {
+            if (input) {
+                input.addEventListener('input', updateRegistrationPreview);
+            }
+        });
+        preferredInputs.forEach(function(input) {
+            input.addEventListener('change', updateRegistrationPreview);
+        });
+        updateRegistrationPreview();
+    }
 });
