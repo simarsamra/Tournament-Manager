@@ -6,6 +6,7 @@ urlpatterns = [
     path("login/", views.login_view, name="login"),
     path("logout/", views.logout_view, name="logout"),
     path("register/", views.register_view, name="register"),
+    path("tournament/<int:pk>/register/", views.register_view, name="tournament_register"),
 
     # Dashboard
     path("dashboard/", views.dashboard_view, name="dashboard"),
@@ -18,6 +19,9 @@ urlpatterns = [
     path("tournament/<int:pk>/add-court-availability/", views.add_court_availability, name="add_court_availability"),
     path("tournament/<int:pk>/add-timeslot/", views.add_timeslot, name="add_timeslot"),
     path("tournament/<int:pk>/add-teams/", views.add_teams_bulk, name="add_teams_bulk"),
+    path("tournament/<int:pk>/open-registration/", views.open_registration, name="open_registration"),
+    path("tournament/<int:pk>/close-registration/", views.close_registration, name="close_registration"),
+    path("tournament/<int:pk>/generate-schedule/", views.generate_schedule, name="generate_schedule"),
     path("tournament/<int:pk>/start/", views.start_tournament, name="start_tournament"),
     path("tournament/select/", views.select_tournament, name="select_tournament"),
     path("tournament/<int:pk>/delete/", views.delete_tournament, name="delete_tournament"),

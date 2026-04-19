@@ -43,9 +43,12 @@ def _get_available_tournaments():
     ).annotate(
         status_rank=db_models.Case(
             db_models.When(status="active", then=db_models.Value(0)),
-            db_models.When(status="setup", then=db_models.Value(1)),
-            db_models.When(status="completed", then=db_models.Value(2)),
-            default=db_models.Value(3),
+            db_models.When(status="registration_open", then=db_models.Value(1)),
+            db_models.When(status="ready", then=db_models.Value(2)),
+            db_models.When(status="scheduled", then=db_models.Value(3)),
+            db_models.When(status="setup", then=db_models.Value(4)),
+            db_models.When(status="completed", then=db_models.Value(5)),
+            default=db_models.Value(6),
             output_field=db_models.IntegerField(),
         )
     ).order_by("status_rank", "-created_at")
@@ -63,8 +66,7 @@ def _get_tournament(request=None):
                 selected = tournaments.get(pk=selected_id)
                 request.session["selected_tournament_id"] = selected.pk
                 return selected
-    fallback = tournaments.filter(status="active").order_by("-created_at").first()
-    fallback = fallback or tournaments.order_by("-created_at").first()
+    fallback = _get_available_tournaments().first()
     if (
         fallback
         and request
@@ -179,11 +181,28 @@ def logout_view(request):
     return redirect("login")
 
 
-def register_view(request):
-    tournament = _get_tournament(request)
+def register_view(request, pk=None):
+    open_tournaments = Tournament.objects.filter(status="registration_open").order_by("start_date", "created_at")
+    tournament = get_object_or_404(Tournament, pk=pk) if pk is not None else None
+    if tournament is None and open_tournaments.count() == 1:
+        tournament = open_tournaments.first()
+
     if not tournament:
-        messages.error(request, "No tournament has been created yet.")
-        return render(request, "core/register.html", {"form": TeamRegistrationForm()})
+        return render(request, "core/register.html", {
+            "form": TeamRegistrationForm(),
+            "open_tournaments": open_tournaments,
+        })
+
+    if tournament.status != "registration_open":
+        messages.error(request, "Registration is currently closed for this tournament.")
+        return render(request, "core/register.html", {
+            "form": TeamRegistrationForm(tournament=tournament),
+            "tournament": tournament,
+            "players_per_team": tournament.players_per_team if tournament else 1,
+            "registration_closed": True,
+            "open_tournaments": open_tournaments,
+        })
+
     if request.method == "POST":
         form = TeamRegistrationForm(request.POST, tournament=tournament)
         if form.is_valid():
@@ -194,6 +213,7 @@ def register_view(request):
                     "form": form,
                     "tournament": tournament,
                     "players_per_team": tournament.players_per_team if tournament else 1,
+                    "open_tournaments": open_tournaments,
                 })
             user = User.objects.create_user(
                 username=form.cleaned_data["username"],
@@ -205,7 +225,6 @@ def register_view(request):
                 name=team_name,
             )
             team.preferred_courts.set(form.cleaned_data.get("preferred_courts", []))
-            # Create player records from player names
             player_names_text = form.cleaned_data.get("player_names", "").strip()
             if player_names_text:
                 for pname in player_names_text.split("\n"):
@@ -220,8 +239,10 @@ def register_view(request):
     else:
         form = TeamRegistrationForm(tournament=tournament)
     return render(request, "core/register.html", {
-        "form": form, "tournament": tournament,
+        "form": form,
+        "tournament": tournament,
         "players_per_team": tournament.players_per_team if tournament else 1,
+        "open_tournaments": open_tournaments,
     })
 
 
@@ -257,7 +278,9 @@ def dashboard_view(request):
         all_tournaments = _get_available_tournaments()
         context["all_tournaments"] = all_tournaments
         context["active_tournaments_count"] = all_tournaments.filter(status="active").count()
-        context["setup_tournaments_count"] = all_tournaments.filter(status="setup").count()
+        context["setup_tournaments_count"] = all_tournaments.filter(
+            status__in=["setup", "registration_open", "ready", "scheduled"]
+        ).count()
         context["completed_tournaments_count"] = all_tournaments.filter(status="completed").count()
     if tournament and is_organizer:
         context["total_teams"] = tournament.teams.count()
@@ -467,7 +490,33 @@ def add_teams_bulk(request, pk):
 
 @login_required
 @require_POST
-def start_tournament(request, pk):
+def open_registration(request, pk):
+    if not _is_organizer(request.user):
+        return redirect("dashboard")
+    tournament = get_object_or_404(Tournament, pk=pk)
+    tournament.status = "registration_open"
+    tournament.save(update_fields=["status"])
+    log_action(request, "registration_opened", f"Registration opened for '{tournament.name}'", tournament=tournament)
+    messages.success(request, "Registration is now open.")
+    return redirect("tournament_config", pk=pk)
+
+
+@login_required
+@require_POST
+def close_registration(request, pk):
+    if not _is_organizer(request.user):
+        return redirect("dashboard")
+    tournament = get_object_or_404(Tournament, pk=pk)
+    tournament.status = "ready"
+    tournament.save(update_fields=["status"])
+    log_action(request, "registration_closed", f"Registration closed for '{tournament.name}'", tournament=tournament)
+    messages.success(request, "Registration closed. The tournament is ready for scheduling checks.")
+    return redirect("tournament_config", pk=pk)
+
+
+@login_required
+@require_POST
+def generate_schedule(request, pk):
     if not _is_organizer(request.user):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
@@ -477,6 +526,29 @@ def start_tournament(request, pk):
             messages.error(request, error)
         return redirect("tournament_config", pk=pk)
     generate_fixtures(tournament)
+    tournament.status = "scheduled"
+    tournament.save(update_fields=["status"])
+    log_action(request, "schedule_generated", f"Draft schedule generated for '{tournament.name}'", tournament=tournament)
+    messages.success(request, "Draft schedule generated. Review fixtures before publishing.")
+    return redirect("fixtures")
+
+
+@login_required
+@require_POST
+def start_tournament(request, pk):
+    if not _is_organizer(request.user):
+        return redirect("dashboard")
+    tournament = get_object_or_404(Tournament, pk=pk)
+    if tournament.status != "scheduled":
+        readiness_errors = _validate_tournament_ready(tournament)
+        if readiness_errors:
+            for error in readiness_errors:
+                messages.error(request, error)
+            return redirect("tournament_config", pk=pk)
+        generate_fixtures(tournament)
+        tournament.status = "scheduled"
+        tournament.save(update_fields=["status"])
+        messages.info(request, "Draft schedule was generated automatically before publishing.")
     tournament.status = "active"
     tournament.started_at = timezone.now()
     tournament.save(update_fields=["status", "started_at"])
@@ -484,7 +556,7 @@ def start_tournament(request, pk):
                f"Tournament '{tournament.name}' started with "
                f"{tournament.teams.filter(status='active').count()} teams",
                tournament=tournament)
-    messages.success(request, "Tournament started! Fixtures generated.")
+    messages.success(request, "Tournament started! Fixtures are now live.")
     return redirect("fixtures")
 
 

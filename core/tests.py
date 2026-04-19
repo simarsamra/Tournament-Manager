@@ -44,6 +44,8 @@ class UXAndLogicRegressionTests(TestCase):
 
 	def test_register_duplicate_team_name_shows_form_error(self):
 		tournament = self._create_tournament()
+		tournament.status = "registration_open"
+		tournament.save(update_fields=["status"])
 		self._create_team(tournament, "Falcons", username="existing_user")
 
 		response = self.client.post(
@@ -184,6 +186,64 @@ class UXAndLogicRegressionTests(TestCase):
 		tournament = form.save()
 		self.assertEqual(str(tournament.start_date), "2026-05-01")
 		self.assertEqual(tournament.expected_teams_count, 4)
+
+	def test_tournament_specific_registration_creates_team_in_correct_tournament(self):
+		open_tournament = self._create_tournament(name="Open Cup")
+		open_tournament.status = "registration_open"
+		open_tournament.save(update_fields=["status"])
+		other_tournament = self._create_tournament(name="Other Cup")
+		court = Court.objects.create(tournament=open_tournament, name="Court A", is_available=True)
+
+		response = self.client.post(
+			reverse("tournament_register", kwargs={"pk": open_tournament.pk}),
+			{
+				"team_name": "Joiners",
+				"username": "joiners_user",
+				"password": "abc12345",
+				"password_confirm": "abc12345",
+				"player_names": "Alice",
+				"preferred_courts": [str(court.pk)],
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(Team.objects.filter(tournament=open_tournament, name="Joiners").exists())
+		self.assertFalse(Team.objects.filter(tournament=other_tournament, name="Joiners").exists())
+
+	def test_organizer_generates_schedule_draft_then_publishes_tournament(self):
+		tournament = self._create_tournament(name="Draft Flow")
+		tournament.expected_teams_count = 2
+		tournament.start_date = timezone.localdate() + timedelta(days=1)
+		tournament.save(update_fields=["expected_teams_count", "start_date"])
+		court = Court.objects.create(tournament=tournament, name="Court 1", is_available=True)
+		CourtAvailability.objects.create(
+			court=court,
+			weekday=tournament.start_date.weekday(),
+			start_time="12:00",
+			end_time="14:00",
+			start_date=tournament.start_date,
+		)
+		for name in ("Team A", "Team B"):
+			team = self._create_team(tournament, name)
+			Player.objects.create(team=team, name=f"{name} Player")
+			team.preferred_courts.add(court)
+		self.client.force_login(self.organizer)
+
+		self.client.post(reverse("open_registration", kwargs={"pk": tournament.pk}), follow=True)
+		self.client.post(reverse("close_registration", kwargs={"pk": tournament.pk}), follow=True)
+		draft_response = self.client.post(reverse("generate_schedule", kwargs={"pk": tournament.pk}), follow=True)
+
+		self.assertEqual(draft_response.status_code, 200)
+		tournament.refresh_from_db()
+		self.assertEqual(tournament.status, "scheduled")
+		self.assertGreater(tournament.matches.count(), 0)
+
+		publish_response = self.client.post(reverse("start_tournament", kwargs={"pk": tournament.pk}), follow=True)
+		self.assertEqual(publish_response.status_code, 200)
+		tournament.refresh_from_db()
+		self.assertEqual(tournament.status, "active")
+		self.assertIsNotNone(tournament.started_at)
 
 	def test_start_tournament_requires_expected_team_count_and_preferences(self):
 		tournament = self._create_tournament(name="Strict Start")

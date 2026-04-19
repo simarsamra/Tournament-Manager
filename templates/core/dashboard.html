@@ -30,7 +30,7 @@
             </div>
             <div class="stat-card">
                 <div class="stat-value" style="color:var(--warning)">{{ setup_tournaments_count|default:"0" }}</div>
-                <div class="stat-label">Setup</div>
+                <div class="stat-label">Pre-Live</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value">{{ completed_tournaments_count|default:"0" }}</div>
@@ -94,11 +94,11 @@
         <div class="stat-label">Disputed</div>
     </div>
 </div>
-{% if tournament.status == 'setup' %}
+{% if tournament.status != 'active' and tournament.status != 'completed' %}
 <div class="card">
     <div class="card-body">
-        <p>Tournament <strong>{{ tournament.name }}</strong> is in setup mode.</p>
-        <a href="{% url 'tournament_config' pk=tournament.pk %}" class="btn btn-primary">Configure Tournament</a>
+        <p>Tournament <strong>{{ tournament.name }}</strong> is currently <strong>{{ tournament.get_status_display }}</strong>.</p>
+        <a href="{% url 'tournament_config' pk=tournament.pk %}" class="btn btn-primary">Open Workflow</a>
     </div>
 </div>
 {% endif %}

@@ -41,6 +41,9 @@ class Tournament(models.Model):
         max_length=20,
         choices=[
             ("setup", "Setup"),
+            ("registration_open", "Registration Open"),
+            ("ready", "Ready for Scheduling"),
+            ("scheduled", "Schedule Draft Ready"),
             ("active", "Active"),
             ("completed", "Completed"),
         ],
