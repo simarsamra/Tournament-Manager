@@ -8,9 +8,13 @@
         {% if is_own_team or is_organizer %}
         <a href="{% url 'team_preferences' pk=team.pk %}" class="btn btn-outline">Preferences</a>
         {% endif %}
-        {% if team.status == "active" and is_own_team or is_organizer %}
+        {% if team.status == "active" and is_own_team or team.status == "active" and is_organizer %}
         <form method="post" action="{% url 'withdraw_team' pk=team.pk %}" style="display:inline">
             {% csrf_token %}
+            {% if is_own_team and not is_organizer %}
+            <input type="hidden" name="confirm_withdraw" value="yes">
+            <input type="password" name="password" class="form-control" placeholder="Confirm password" style="display:inline;width:180px;vertical-align:middle;">
+            {% endif %}
             <button type="submit" class="btn btn-danger" onclick="return confirm('Withdraw this team? This cannot be undone.')">Withdraw</button>
         </form>
         {% endif %}
@@ -31,6 +35,19 @@
         <div class="stat-label">Losses</div>
     </div>
 </div>
+
+{% if players %}
+<div class="card mb-2">
+    <div class="card-header">Players ({{ players.count }})</div>
+    <div class="card-body">
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem;">
+            {% for player in players %}
+            <span style="background:#e8f4fd;padding:0.35rem 0.75rem;border-radius:20px;font-size:0.85rem;">{{ player.name }}</span>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <div class="card">
     <div class="card-header">Match History</div>

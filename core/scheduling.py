@@ -2,6 +2,7 @@
 import math
 import itertools
 from datetime import timedelta
+from django.db import models
 from django.utils import timezone
 from .models import Match, Court, TimeSlot, Team
 
@@ -40,6 +41,56 @@ def generate_round_robin(tournament):
                 "match_number": match_num,
             })
             match_num += 1
+
+    _assign_schedule(tournament, matches_data)
+
+
+def generate_double_round_robin(tournament):
+    """Generate home-and-away round-robin fixtures."""
+    teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+    n = len(teams)
+    if n < 2:
+        return
+
+    first_leg = []
+    if n % 2 == 1:
+        teams.append(None)  # bye placeholder
+        n += 1
+
+    fixed = teams[0]
+    rotating = teams[1:]
+    match_num = 1
+
+    for round_idx in range(n - 1):
+        round_pairs = [(fixed, rotating[0])]
+        for i in range(1, n // 2):
+            round_pairs.append((rotating[i], rotating[n - 1 - i]))
+        rotating = [rotating[-1]] + rotating[:-1]
+
+        for t1, t2 in round_pairs:
+            if t1 is None or t2 is None:
+                continue
+            first_leg.append((t1, t2, round_idx + 1))
+
+    matches_data = []
+    for t1, t2, round_no in first_leg:
+        matches_data.append({
+            "team1": t1,
+            "team2": t2,
+            "round_number": round_no,
+            "match_number": match_num,
+        })
+        match_num += 1
+
+    round_offset = n - 1
+    for t1, t2, round_no in first_leg:
+        matches_data.append({
+            "team1": t2,
+            "team2": t1,
+            "round_number": round_no + round_offset,
+            "match_number": match_num,
+        })
+        match_num += 1
 
     _assign_schedule(tournament, matches_data)
 
@@ -215,6 +266,49 @@ def generate_double_elimination(tournament):
     # Losers bracket matches are created dynamically as teams are eliminated
 
 
+def generate_consolation(tournament):
+    """Generate main knockout bracket; consolation is generated after round 1 completes."""
+    teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+    generate_knockout(tournament, teams=teams, bracket_type="winners")
+
+
+def generate_consolation_if_ready(tournament):
+    """Generate consolation bracket from first-round losers once round 1 is complete."""
+    if tournament.format != "consolation":
+        return False
+    if tournament.matches.filter(bracket_type="consolation").exists():
+        return False
+
+    first_round = tournament.matches.filter(bracket_type="winners", round_number=1)
+    if not first_round.exists():
+        return False
+
+    incomplete = first_round.exclude(status__in=["confirmed", "forfeited", "cancelled", "bye"])
+    if incomplete.exists():
+        return False
+
+    losers = []
+    for match in first_round:
+        if not match.team1_id or not match.team2_id or not match.winner_id:
+            continue
+        if match.winner_id == match.team1_id:
+            losers.append(match.team2)
+        elif match.winner_id == match.team2_id:
+            losers.append(match.team1)
+
+    if len(losers) < 2:
+        return False
+
+    max_match = tournament.matches.aggregate(m=models.Max("match_number"))["m"] or 0
+    generate_knockout(
+        tournament,
+        teams=losers,
+        start_match=max_match + 1,
+        bracket_type="consolation",
+    )
+    return True
+
+
 def generate_fixtures(tournament):
     """Main entry point for fixture generation."""
     # Clear existing matches
@@ -224,10 +318,14 @@ def generate_fixtures(tournament):
     fmt = tournament.format
     if fmt == "round_robin":
         generate_round_robin(tournament)
+    elif fmt == "double_round_robin":
+        generate_double_round_robin(tournament)
     elif fmt == "knockout":
         generate_knockout(tournament)
     elif fmt == "double_elimination":
         generate_double_elimination(tournament)
+    elif fmt == "consolation":
+        generate_consolation(tournament)
     elif fmt == "hybrid":
         generate_hybrid(tournament)
 
@@ -235,8 +333,6 @@ def generate_fixtures(tournament):
 def _assign_schedule(tournament, matches_data):
     """Assign times and courts to match data dicts, then bulk create."""
     courts = list(tournament.courts.filter(is_available=True))
-    time_slots = list(tournament.time_slots.order_by("start_time"))
-    duration = timedelta(minutes=tournament.default_match_duration)
 
     if not courts:
         # Create matches without schedule
@@ -245,66 +341,20 @@ def _assign_schedule(tournament, matches_data):
         ])
         return
 
-    # Build available slots
-    slots = []
-    if time_slots:
-        for ts in time_slots:
-            current = ts.start_time
-            while current + duration <= ts.end_time:
-                for court in courts:
-                    slots.append((current, current + duration, court))
-                current += duration
-    else:
-        # Generate default slots starting from tomorrow
-        start = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        for day_offset in range(30):
-            day_start = start + timedelta(days=day_offset)
-            for hour_offset in range(12):
-                slot_start = day_start + timedelta(minutes=30 * hour_offset)
-                slot_end = slot_start + duration
-                for court in courts:
-                    slots.append((slot_start, slot_end, court))
-
-    # Assign slots to matches respecting preferences and conflicts
+    slots = _build_slots(tournament, courts)
     used_slots = set()
     matches_to_create = []
 
     for md in matches_data:
         t1 = md["team1"]
         t2 = md["team2"]
-        t1_prefs = set(t1.preferred_courts.values_list("id", flat=True)) if t1 else set()
-        t2_prefs = set(t2.preferred_courts.values_list("id", flat=True)) if t2 else set()
-        mutual_prefs = t1_prefs & t2_prefs
-
-        assigned = False
-        # Try mutual preferred courts first
-        for start_t, end_t, court in slots:
-            slot_key = (start_t, court.id)
-            if slot_key in used_slots:
-                continue
-            if _has_team_conflict(t1, t2, start_t, end_t, used_slots, matches_to_create):
-                continue
-            if mutual_prefs and court.id in mutual_prefs:
-                md["scheduled_time"] = start_t
-                md["scheduled_end_time"] = end_t
-                md["court"] = court
-                used_slots.add(slot_key)
-                assigned = True
-                break
-
-        if not assigned:
-            for start_t, end_t, court in slots:
-                slot_key = (start_t, court.id)
-                if slot_key in used_slots:
-                    continue
-                if _has_team_conflict(t1, t2, start_t, end_t, used_slots, matches_to_create):
-                    continue
-                md["scheduled_time"] = start_t
-                md["scheduled_end_time"] = end_t
-                md["court"] = court
-                used_slots.add(slot_key)
-                assigned = True
-                break
+        result = _find_preferred_slot(t1, t2, slots, used_slots, matches_to_create)
+        if result:
+            start_t, end_t, court = result
+            md["scheduled_time"] = start_t
+            md["scheduled_end_time"] = end_t
+            md["court"] = court
+            used_slots.add((start_t, court.id))
 
         matches_to_create.append(Match(tournament=tournament, **md))
 
@@ -321,48 +371,124 @@ def _has_team_conflict(t1, t2, start, end, used_slots, pending_matches):
     return False
 
 
+def _find_preferred_slot(t1, t2, slots, used_slots, pending_matches):
+    """Find the best available slot using 3-tier preference matching.
+
+    Tries: 1) mutual preferred courts, 2) any preferred court, 3) any available slot.
+    Returns (start_time, end_time, court) or None if no slot found.
+    """
+    t1_prefs = set(t1.preferred_courts.values_list("id", flat=True)) if t1 else set()
+    t2_prefs = set(t2.preferred_courts.values_list("id", flat=True)) if t2 else set()
+    mutual_prefs = t1_prefs & t2_prefs
+    any_prefs = t1_prefs | t2_prefs
+
+    # Try mutual preferred courts first
+    if mutual_prefs:
+        for start_t, end_t, court in slots:
+            slot_key = (start_t, court.id)
+            if slot_key in used_slots:
+                continue
+            if _has_team_conflict(t1, t2, start_t, end_t, used_slots, pending_matches):
+                continue
+            if court.id in mutual_prefs:
+                return start_t, end_t, court
+
+    # Try any preferred court
+    if any_prefs:
+        for start_t, end_t, court in slots:
+            slot_key = (start_t, court.id)
+            if slot_key in used_slots:
+                continue
+            if _has_team_conflict(t1, t2, start_t, end_t, used_slots, pending_matches):
+                continue
+            if court.id in any_prefs:
+                return start_t, end_t, court
+
+    # Fallback to any available slot
+    for start_t, end_t, court in slots:
+        slot_key = (start_t, court.id)
+        if slot_key in used_slots:
+            continue
+        if _has_team_conflict(t1, t2, start_t, end_t, used_slots, pending_matches):
+            continue
+        return start_t, end_t, court
+
+    return None
+
+
+def _build_slots(tournament, courts):
+    """Build available time slots for scheduling."""
+    duration = timedelta(minutes=tournament.default_match_duration)
+    time_slots = list(tournament.time_slots.order_by("start_time"))
+    slots = []
+    if time_slots:
+        for ts in time_slots:
+            current = ts.start_time
+            while current + duration <= ts.end_time:
+                for court in courts:
+                    slots.append((current, current + duration, court))
+                current += duration
+    else:
+        start = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        for day_offset in range(30):
+            day_start = start + timedelta(days=day_offset)
+            for hour_offset in range(12):
+                slot_start = day_start + timedelta(minutes=30 * hour_offset)
+                slot_end = slot_start + duration
+                for court in courts:
+                    slots.append((slot_start, slot_end, court))
+    return slots
+
+
 def _assign_schedule_to_matches(tournament, matches):
-    """Assign schedule to already-created Match objects."""
+    """Assign schedule to already-created Match objects, respecting court preferences."""
     courts = list(tournament.courts.filter(is_available=True))
     if not courts:
         return
 
-    duration = timedelta(minutes=tournament.default_match_duration)
-    start = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    slots = _build_slots(tournament, courts)
+    used_slots = set()
+    scheduled_matches = []
 
-    slot_idx = 0
     for match in matches:
         if match.status == "bye":
             continue
-        day_offset = slot_idx // (len(courts) * 12)
-        time_offset = (slot_idx // len(courts)) % 12
-        court_idx = slot_idx % len(courts)
 
-        match.scheduled_time = start + timedelta(days=day_offset, minutes=30 * time_offset)
-        match.scheduled_end_time = match.scheduled_time + duration
-        match.court = courts[court_idx]
-        match.save(update_fields=["scheduled_time", "scheduled_end_time", "court"])
-        slot_idx += 1
+        result = _find_preferred_slot(
+            match.team1, match.team2, slots, used_slots, scheduled_matches
+        )
+        if result:
+            start_t, end_t, court = result
+            match.scheduled_time = start_t
+            match.scheduled_end_time = end_t
+            match.court = court
+            used_slots.add((start_t, court.id))
+            match.save(update_fields=["scheduled_time", "scheduled_end_time", "court"])
+        scheduled_matches.append(match)
 
 
 def _assign_schedule_to_existing(tournament):
-    """Assign schedule to all upcoming matches of a tournament."""
-    matches = list(tournament.matches.filter(status="upcoming").order_by("group", "round_number", "match_number"))
+    """Assign schedule to all upcoming matches of a tournament, respecting preferences."""
+    matches = list(tournament.matches.filter(status="upcoming").select_related(
+        "team1", "team2"
+    ).order_by("group", "round_number", "match_number"))
     courts = list(tournament.courts.filter(is_available=True))
     if not courts or not matches:
         return
 
-    duration = timedelta(minutes=tournament.default_match_duration)
-    start = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    slots = _build_slots(tournament, courts)
+    used_slots = set()
+    scheduled_matches = []
 
-    slot_idx = 0
     for match in matches:
-        day_offset = slot_idx // (len(courts) * 12)
-        time_offset = (slot_idx // len(courts)) % 12
-        court_idx = slot_idx % len(courts)
-
-        match.scheduled_time = start + timedelta(days=day_offset, minutes=30 * time_offset)
-        match.scheduled_end_time = match.scheduled_time + duration
-        match.court = courts[court_idx]
-        match.save(update_fields=["scheduled_time", "scheduled_end_time", "court"])
-        slot_idx += 1
+        result = _find_preferred_slot(
+            match.team1, match.team2, slots, used_slots, scheduled_matches
+        )
+        if result:
+            start_t, end_t, court = result
+            match.scheduled_time = start_t
+            match.scheduled_end_time = end_t
+            match.court = court
+            used_slots.add((start_t, court.id))
+            match.save(update_fields=["scheduled_time", "scheduled_end_time", "court"])
+        scheduled_matches.append(match)

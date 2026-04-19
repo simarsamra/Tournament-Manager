@@ -28,6 +28,7 @@ urlpatterns = [
     path("match/<int:pk>/confirm-score/", views.confirm_score, name="confirm_score"),
     path("match/<int:pk>/dispute-score/", views.dispute_score, name="dispute_score"),
     path("match/<int:pk>/resolve-dispute/", views.resolve_dispute, name="resolve_dispute"),
+    path("match/<int:pk>/mark-no-show/", views.mark_no_show, name="mark_no_show"),
 
     # Rescheduling
     path("match/<int:pk>/reschedule/", views.request_reschedule, name="request_reschedule"),

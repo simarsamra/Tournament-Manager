@@ -3,7 +3,7 @@
 {% block page_header %}Configure Tournament{% endblock %}
 {% block content %}
 <h1 class="page-title">{{ tournament.name }} <span class="badge badge-{{ tournament.status }}">{{ tournament.get_status_display }}</span></h1>
-<p class="text-muted mb-2">Format: {{ tournament.get_format_display }} | Duration: {{ tournament.default_match_duration }}min</p>
+<p class="text-muted mb-2">Sport: {{ tournament.get_sport_type_display }} | Format: {{ tournament.get_format_display }} | Players/Team: {{ tournament.players_per_team }} | Duration: {{ tournament.default_match_duration }}min</p>
 
 <div class="grid grid-3">
     <!-- Courts -->
@@ -59,20 +59,32 @@
         <div class="card-header">Teams ({{ teams.count }})</div>
         <div class="card-body">
             {% for t in teams %}
-            <div class="d-flex justify-between align-center mb-1">
-                <span>{{ t.name }}</span>
-                <span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span>
+            <div class="mb-1" style="padding:0.5rem;background:#f8f9fa;border-radius:6px;">
+                <div class="d-flex justify-between align-center">
+                    <strong>{{ t.name }}</strong>
+                    <span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span>
+                </div>
+                {% if t.players.all %}
+                <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
+                    Players: {% for p in t.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                </div>
+                {% endif %}
             </div>
             {% empty %}
             <p class="text-muted">No teams registered yet.</p>
             {% endfor %}
             <hr style="margin:1rem 0;">
-            <form method="post" action="{% url 'add_teams_bulk' pk=tournament.pk %}">
+            <h4 style="font-size:0.9rem;margin-bottom:0.5rem;">Add Teams via Text</h4>
+            <form method="post" action="{% url 'add_teams_bulk' pk=tournament.pk %}" enctype="multipart/form-data">
                 {% csrf_token %}
                 <div class="form-group">
-                    <label>Add Teams (bulk)</label>
                     {{ bulk_team_form.teams_text }}
                     <small class="text-muted">{{ bulk_team_form.teams_text.help_text }}</small>
+                </div>
+                <h4 style="font-size:0.9rem;margin:0.75rem 0 0.5rem;">Or Upload CSV/Text File</h4>
+                <div class="form-group">
+                    {{ bulk_team_file_form.file }}
+                    <small class="text-muted">{{ bulk_team_file_form.file.help_text }}</small>
                 </div>
                 <button type="submit" class="btn btn-primary btn-sm">Add Teams</button>
             </form>
@@ -88,7 +100,7 @@
         </div>
         <form method="post" action="{% url 'start_tournament' pk=tournament.pk %}">
             {% csrf_token %}
-            <button type="submit" class="btn btn-success btn-lg" onclick="return confirm('Start the tournament? This will generate all fixtures.')">
+            <button type="submit" class="btn btn-success btn-lg" onclick="return confirm('Start the tournament? This will generate all fixtures and schedule matches based on team court preferences.')">
                 🚀 Start Tournament
             </button>
         </form>

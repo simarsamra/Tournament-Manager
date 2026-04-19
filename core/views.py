@@ -17,13 +17,14 @@ from django.views.decorators.http import require_POST
 
 from .models import (
     Tournament, Court, TimeSlot, Team, Match,
-    RescheduleRequest, OpenSlot, AuditLog, BackupRecord,
+    RescheduleRequest, OpenSlot, AuditLog, BackupRecord, Player,
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
     ScoreSubmitForm, RescheduleForm, TeamPreferencesForm, BulkTeamForm,
+    BulkTeamFileForm,
 )
-from .scheduling import generate_fixtures
+from .scheduling import generate_fixtures, generate_consolation_if_ready
 from .standings import calculate_standings, advance_winner, get_bracket_data, check_group_stage_complete
 from .withdrawals import handle_withdrawal
 from .backup import create_backup, validate_backup, restore_backup, list_backups, delete_backup
@@ -43,6 +44,16 @@ def _get_team(user):
 
 def _is_organizer(user):
     return user.is_staff or user.is_superuser
+
+
+def _safe_page_param(request, default=1):
+    """Return a safe positive page number from query params."""
+    raw = request.GET.get("page", default)
+    try:
+        page = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return page if page > 0 else default
 
 
 # -- Auth Views --
@@ -77,15 +88,30 @@ def register_view(request):
     if request.method == "POST":
         form = TeamRegistrationForm(request.POST)
         if form.is_valid():
+            team_name = form.cleaned_data["team_name"]
+            if Team.objects.filter(tournament=tournament, name=team_name).exists():
+                form.add_error("team_name", "Team name already exists in this tournament.")
+                return render(request, "core/register.html", {
+                    "form": form,
+                    "tournament": tournament,
+                    "players_per_team": tournament.players_per_team if tournament else 1,
+                })
             user = User.objects.create_user(
                 username=form.cleaned_data["username"],
                 password=form.cleaned_data["password"],
             )
-            Team.objects.create(
+            team = Team.objects.create(
                 user=user,
                 tournament=tournament,
-                name=form.cleaned_data["team_name"],
+                name=team_name,
             )
+            # Create player records from player names
+            player_names_text = form.cleaned_data.get("player_names", "").strip()
+            if player_names_text:
+                for pname in player_names_text.split("\n"):
+                    pname = pname.strip()
+                    if pname:
+                        Player.objects.create(team=team, name=pname)
             log_action(request, "team_registered",
                        f"Team '{form.cleaned_data['team_name']}' registered",
                        tournament=tournament)
@@ -93,7 +119,10 @@ def register_view(request):
             return redirect("dashboard")
     else:
         form = TeamRegistrationForm()
-    return render(request, "core/register.html", {"form": form, "tournament": tournament})
+    return render(request, "core/register.html", {
+        "form": form, "tournament": tournament,
+        "players_per_team": tournament.players_per_team if tournament else 1,
+    })
 
 
 # -- Dashboard --
@@ -158,14 +187,16 @@ def tournament_config(request, pk):
     if not _is_organizer(request.user):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
+    teams = tournament.teams.prefetch_related("players").all()
     return render(request, "core/tournament_config.html", {
         "tournament": tournament,
         "courts": tournament.courts.all(),
-        "teams": tournament.teams.all(),
+        "teams": teams,
         "time_slots": tournament.time_slots.all(),
         "court_form": CourtForm(),
         "timeslot_form": TimeSlotForm(),
         "bulk_team_form": BulkTeamForm(),
+        "bulk_team_file_form": BulkTeamFileForm(),
     })
 
 
@@ -196,6 +227,9 @@ def add_timeslot(request, pk):
         date = form.cleaned_data["date"]
         start = form.cleaned_data["start_time"]
         end = form.cleaned_data["end_time"]
+        if end <= start:
+            messages.error(request, "End time must be after start time.")
+            return redirect("tournament_config", pk=pk)
         start_dt = timezone.make_aware(datetime.combine(date, start))
         end_dt = timezone.make_aware(datetime.combine(date, end))
         TimeSlot.objects.create(tournament=tournament, start_time=start_dt, end_time=end_dt)
@@ -204,32 +238,82 @@ def add_timeslot(request, pk):
     return redirect("tournament_config", pk=pk)
 
 
+def _parse_team_line(line):
+    """Parse a single team line: team_name,username,password[,player1;player2;...]."""
+    parts = [p.strip() for p in line.split(",")]
+    if len(parts) < 3:
+        return None
+    team_name, username, password = parts[0], parts[1], parts[2]
+    player_names = []
+    if len(parts) >= 4 and parts[3]:
+        player_names = [p.strip() for p in parts[3].split(";") if p.strip()]
+    return {"team_name": team_name, "username": username, "password": password, "player_names": player_names}
+
+
+def _create_teams_from_data(tournament, team_data_list, request):
+    """Create teams and players from parsed data. Returns count of added teams."""
+    added = 0
+    for data in team_data_list:
+        team_name = data["team_name"]
+        username = data["username"]
+        password = data["password"]
+        player_names = data.get("player_names", [])
+        if User.objects.filter(username=username).exists():
+            messages.warning(request, f"Username '{username}' already exists, skipped.")
+            continue
+        if tournament.teams.filter(name=team_name).exists():
+            messages.warning(request, f"Team '{team_name}' already exists, skipped.")
+            continue
+        user = User.objects.create_user(username=username, password=password)
+        team = Team.objects.create(user=user, tournament=tournament, name=team_name)
+        for pname in player_names:
+            Player.objects.create(team=team, name=pname)
+        added += 1
+    return added
+
+
 @login_required
 @require_POST
 def add_teams_bulk(request, pk):
     if not _is_organizer(request.user):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
+
+    team_data_list = []
+
+    # Handle text input
     form = BulkTeamForm(request.POST)
     if form.is_valid():
-        lines = form.cleaned_data["teams_text"].strip().split("\n")
-        added = 0
-        for line in lines:
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) != 3:
+        text = form.cleaned_data.get("teams_text", "").strip()
+        if text:
+            for line in text.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                parsed = _parse_team_line(line)
+                if parsed:
+                    team_data_list.append(parsed)
+
+    # Handle file upload
+    file_form = BulkTeamFileForm(request.POST, request.FILES)
+    if file_form.is_valid() and request.FILES.get("file"):
+        uploaded = request.FILES["file"]
+        content = uploaded.read().decode("utf-8", errors="ignore")
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line:
                 continue
-            team_name, username, password = parts
-            if User.objects.filter(username=username).exists():
-                messages.warning(request, f"Username '{username}' already exists, skipped.")
-                continue
-            if tournament.teams.filter(name=team_name).exists():
-                messages.warning(request, f"Team '{team_name}' already exists, skipped.")
-                continue
-            user = User.objects.create_user(username=username, password=password)
-            Team.objects.create(user=user, tournament=tournament, name=team_name)
-            added += 1
+            parsed = _parse_team_line(line)
+            if parsed:
+                team_data_list.append(parsed)
+
+    if team_data_list:
+        added = _create_teams_from_data(tournament, team_data_list, request)
         log_action(request, "teams_bulk_added", f"Added {added} teams", tournament=tournament)
         messages.success(request, f"{added} teams added.")
+    else:
+        messages.warning(request, "No valid team data found.")
+
     return redirect("tournament_config", pk=pk)
 
 
@@ -281,7 +365,7 @@ def fixtures_view(request):
         matches = matches.order_by("status", "match_number")
     else:
         matches = matches.order_by("match_number")
-    page = int(request.GET.get("page", 1))
+    page = _safe_page_param(request)
     per_page = 25
     total = matches.count()
     total_pages = max(1, (total + per_page - 1) // per_page)
@@ -321,6 +405,7 @@ def match_detail(request, pk):
     can_submit = is_participant and match.status in ("upcoming", "in_progress")
     can_confirm = (is_participant and match.status == "pending_confirmation" and match.submitted_by != team)
     can_dispute = can_confirm
+    can_mark_no_show = _is_organizer(request.user) and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress")
     return render(request, "core/match_detail.html", {
         "match": match,
         "team": team,
@@ -328,6 +413,7 @@ def match_detail(request, pk):
         "can_submit": can_submit,
         "can_confirm": can_confirm,
         "can_dispute": can_dispute,
+        "can_mark_no_show": can_mark_no_show,
         "score_form": ScoreSubmitForm(),
         "reschedule_form": RescheduleForm(tournament=match.tournament),
         "reschedule_requests": match.reschedule_requests.order_by("-created_at"),
@@ -376,6 +462,14 @@ def confirm_score(request, pk):
     if match.team1 != team and match.team2 != team:
         messages.error(request, "You are not a participant in this match.")
         return redirect("match_detail", pk=pk)
+    is_elimination = (
+        tournament := match.tournament
+    ).format in ("knockout", "double_elimination", "consolation") or (
+        tournament.format == "hybrid" and not match.group
+    )
+    if is_elimination and match.score_team1 == match.score_team2:
+        messages.error(request, "Draws are not allowed in elimination matches.")
+        return redirect("match_detail", pk=pk)
     match.confirmed_by = team
     match.status = "confirmed"
     if match.score_team1 > match.score_team2:
@@ -383,9 +477,10 @@ def confirm_score(request, pk):
     elif match.score_team2 > match.score_team1:
         match.winner = match.team2
     match.save()
-    tournament = match.tournament
-    if tournament.format in ("knockout", "double_elimination", "hybrid"):
+    if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
         advance_winner(match)
+    if tournament.format == "consolation":
+        generate_consolation_if_ready(tournament)
     if tournament.format == "hybrid" and match.group:
         check_group_stage_complete(tournament)
     log_action(request, "score_confirmed",
@@ -427,8 +522,25 @@ def resolve_dispute(request, pk):
     score1 = request.POST.get("final_score_team1")
     score2 = request.POST.get("final_score_team2")
     if score1 is not None and score2 is not None:
-        match.score_team1 = int(score1)
-        match.score_team2 = int(score2)
+        try:
+            final_score1 = int(score1)
+            final_score2 = int(score2)
+        except (TypeError, ValueError):
+            messages.error(request, "Scores must be valid whole numbers.")
+            return redirect("match_detail", pk=pk)
+        if final_score1 < 0 or final_score2 < 0:
+            messages.error(request, "Scores cannot be negative.")
+            return redirect("match_detail", pk=pk)
+        tournament = match.tournament
+        is_elimination = tournament.format in ("knockout", "double_elimination", "consolation") or (
+            tournament.format == "hybrid" and not match.group
+        )
+        if is_elimination and final_score1 == final_score2:
+            messages.error(request, "Draws are not allowed in elimination matches.")
+            return redirect("match_detail", pk=pk)
+
+        match.score_team1 = final_score1
+        match.score_team2 = final_score2
         match.status = "confirmed"
         if match.score_team1 > match.score_team2:
             match.winner = match.team1
@@ -436,9 +548,10 @@ def resolve_dispute(request, pk):
             match.winner = match.team2
         match.notes += f"\nResolved by organizer."
         match.save()
-        tournament = match.tournament
-        if tournament.format in ("knockout", "double_elimination", "hybrid"):
+        if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
             advance_winner(match)
+        if tournament.format == "consolation":
+            generate_consolation_if_ready(tournament)
         if tournament.format == "hybrid" and match.group:
             check_group_stage_complete(tournament)
         log_action(request, "dispute_resolved",
@@ -538,7 +651,7 @@ def standings_view(request):
     if not tournament:
         return render(request, "core/standings.html", {})
     context = {"tournament": tournament}
-    if tournament.format in ("round_robin", "hybrid"):
+    if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
         if tournament.format == "hybrid":
             groups = sorted(set(
                 tournament.teams.exclude(group="").values_list("group", flat=True)
@@ -552,7 +665,7 @@ def standings_view(request):
                 context["bracket"] = get_bracket_data(tournament)
         else:
             context["standings"] = calculate_standings(tournament)
-    if tournament.format in ("knockout", "double_elimination"):
+    if tournament.format in ("knockout", "double_elimination", "consolation"):
         context["bracket"] = get_bracket_data(tournament)
     return render(request, "core/standings.html", context)
 
@@ -564,7 +677,7 @@ def teams_view(request):
     tournament = _get_tournament()
     if not tournament:
         return render(request, "core/teams.html", {"teams": []})
-    teams = tournament.teams.select_related("user").order_by("name")
+    teams = tournament.teams.select_related("user").prefetch_related("players").order_by("name")
     return render(request, "core/teams.html", {
         "tournament": tournament, "teams": teams,
         "is_organizer": _is_organizer(request.user),
@@ -573,7 +686,7 @@ def teams_view(request):
 
 @login_required
 def team_detail(request, pk):
-    team = get_object_or_404(Team.objects.select_related("tournament", "user"), pk=pk)
+    team = get_object_or_404(Team.objects.select_related("tournament", "user").prefetch_related("players"), pk=pk)
     tournament = team.tournament
     matches = Match.objects.filter(tournament=tournament).filter(
         Q(team1=team) | Q(team2=team)
@@ -586,6 +699,7 @@ def team_detail(request, pk):
     stats["losses"] = stats["played"] - stats["wins"]
     return render(request, "core/team_detail.html", {
         "team": team, "tournament": tournament, "matches": matches, "stats": stats,
+        "players": team.players.all(),
         "is_organizer": _is_organizer(request.user),
         "is_own_team": _get_team(request.user) == team,
     })
@@ -596,12 +710,77 @@ def team_detail(request, pk):
 def withdraw_team(request, pk):
     team = get_object_or_404(Team, pk=pk)
     user_team = _get_team(request.user)
+    is_organizer = _is_organizer(request.user)
     if team != user_team and not _is_organizer(request.user):
         messages.error(request, "Not authorized.")
         return redirect("team_detail", pk=pk)
+    if team.status == "withdrawn":
+        messages.info(request, f"Team '{team.name}' is already withdrawn.")
+        return redirect("team_detail", pk=pk)
+
+    # Team self-withdrawal requires explicit confirmation + password check.
+    if team == user_team and not is_organizer:
+        if request.POST.get("confirm_withdraw") != "yes":
+            messages.error(request, "Please confirm withdrawal before continuing.")
+            return redirect("team_detail", pk=pk)
+        password = request.POST.get("password", "")
+        if not password or not request.user.check_password(password):
+            messages.error(request, "Incorrect password. Withdrawal cancelled.")
+            return redirect("team_detail", pk=pk)
+
     handle_withdrawal(request, team, team.tournament)
     messages.success(request, f"Team '{team.name}' has been withdrawn.")
     return redirect("teams")
+
+
+@login_required
+@require_POST
+def mark_no_show(request, pk):
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can mark no-shows.")
+        return redirect("match_detail", pk=pk)
+
+    match = get_object_or_404(Match, pk=pk)
+    if match.status not in ("upcoming", "in_progress", "pending_confirmation"):
+        messages.error(request, "No-show can only be recorded for active/upcoming matches.")
+        return redirect("match_detail", pk=pk)
+
+    no_show_team_id = request.POST.get("no_show_team")
+    if str(match.team1_id) == str(no_show_team_id):
+        loser = match.team1
+        winner = match.team2
+    elif str(match.team2_id) == str(no_show_team_id):
+        loser = match.team2
+        winner = match.team1
+    else:
+        messages.error(request, "Invalid team selected for no-show.")
+        return redirect("match_detail", pk=pk)
+
+    if not winner:
+        messages.error(request, "Cannot mark no-show: opponent not assigned.")
+        return redirect("match_detail", pk=pk)
+
+    match.status = "forfeited"
+    match.winner = winner
+    match.notes = (match.notes + "\n" if match.notes else "") + f"No-show: {loser.name}"
+    match.save(update_fields=["status", "winner", "notes"])
+
+    tournament = match.tournament
+    if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
+        advance_winner(match)
+    if tournament.format == "consolation":
+        generate_consolation_if_ready(tournament)
+    if tournament.format == "hybrid" and match.group:
+        check_group_stage_complete(tournament)
+
+    log_action(
+        request,
+        "match_no_show",
+        f"No-show recorded for {match}. Loser: {loser.name}, Winner: {winner.name}",
+        tournament=tournament,
+    )
+    messages.success(request, f"No-show recorded. {winner.name} wins by forfeit.")
+    return redirect("match_detail", pk=pk)
 
 
 @login_required
@@ -694,7 +873,7 @@ def analytics_view(request):
         "team_stats": team_stats, "schedule_density": json.dumps(schedule_density),
         "withdrawal_info": withdrawal_info, "recent_logs": recent_logs,
     }
-    if tournament.format in ("round_robin", "hybrid"):
+    if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
         context["standings"] = calculate_standings(tournament)
     return render(request, "core/analytics.html", context)
 
@@ -790,7 +969,7 @@ def audit_log_view(request):
     action_filter = request.GET.get("action", "")
     if action_filter:
         logs = logs.filter(action=action_filter)
-    page = int(request.GET.get("page", 1))
+    page = _safe_page_param(request)
     per_page = 50
     total = logs.count()
     total_pages = max(1, (total + per_page - 1) // per_page)
@@ -831,13 +1010,16 @@ def public_standings(request):
     if not tournament:
         return render(request, "core/public_standings.html", {})
     context = {"tournament": tournament}
-    if tournament.format in ("round_robin", "hybrid"):
+    if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
         if tournament.format == "hybrid":
             groups = sorted(set(tournament.teams.exclude(group="").values_list("group", flat=True)))
             context["group_standings"] = {g: calculate_standings(tournament, group=g) for g in groups}
+            ko_matches = tournament.matches.filter(group="", bracket_type="winners")
+            if ko_matches.exists():
+                context["bracket"] = get_bracket_data(tournament)
         else:
             context["standings"] = calculate_standings(tournament)
-    if tournament.format in ("knockout", "double_elimination"):
+    if tournament.format in ("knockout", "double_elimination", "consolation"):
         context["bracket"] = get_bracket_data(tournament)
     return render(request, "core/public_standings.html", context)
 

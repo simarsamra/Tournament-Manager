@@ -1,19 +1,22 @@
 from django import forms
 from django.contrib.auth.models import User
-from .models import Tournament, Court, Team, Match, RescheduleRequest, TimeSlot
+from .models import Tournament, Court, Team, Match, RescheduleRequest, TimeSlot, Player
 
 
 class TournamentForm(forms.ModelForm):
     class Meta:
         model = Tournament
         fields = [
-            "name", "format", "points_per_win", "points_per_loss",
+            "name", "sport_type", "format", "players_per_team",
+            "points_per_win", "points_per_loss",
             "points_per_draw", "num_groups", "teams_per_group_advance",
             "withdrawal_policy", "default_match_duration",
         ]
         widgets = {
             "name": forms.TextInput(attrs={"class": "form-control"}),
+            "sport_type": forms.Select(attrs={"class": "form-select"}),
             "format": forms.Select(attrs={"class": "form-select"}),
+            "players_per_team": forms.NumberInput(attrs={"class": "form-control", "min": "1"}),
             "points_per_win": forms.NumberInput(attrs={"class": "form-control"}),
             "points_per_loss": forms.NumberInput(attrs={"class": "form-control"}),
             "points_per_draw": forms.NumberInput(attrs={"class": "form-control"}),
@@ -54,6 +57,14 @@ class TeamRegistrationForm(forms.Form):
     )
     password_confirm = forms.CharField(
         widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Confirm Password"})
+    )
+    player_names = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={
+            "class": "form-control", "rows": 4,
+            "placeholder": "Enter player names, one per line"
+        }),
+        help_text="One player name per line (real names of team members)"
     )
 
     def clean(self):
@@ -121,12 +132,22 @@ class TeamPreferencesForm(forms.Form):
 
 
 class BulkTeamForm(forms.Form):
-    """Add multiple teams at once."""
+    """Add multiple teams at once via text."""
     teams_text = forms.CharField(
+        required=False,
         widget=forms.Textarea(attrs={
             "class": "form-control",
             "rows": 10,
-            "placeholder": "One team per line: team_name,username,password"
+            "placeholder": "One team per line: team_name,username,password,player1;player2;player3"
         }),
-        help_text="Format: team_name,username,password (one per line)"
+        help_text="Format: team_name,username,password,player1;player2;... (one per line)"
+    )
+
+
+class BulkTeamFileForm(forms.Form):
+    """Add multiple teams via CSV or text file upload."""
+    file = forms.FileField(
+        required=False,
+        widget=forms.FileInput(attrs={"class": "form-control", "accept": ".csv,.txt"}),
+        help_text="CSV/TXT file: team_name,username,password,player1;player2;... (one per line)"
     )

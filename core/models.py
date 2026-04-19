@@ -7,9 +7,21 @@ from django.utils import timezone
 class Tournament(models.Model):
     FORMAT_CHOICES = [
         ("round_robin", "Round Robin"),
+        ("double_round_robin", "Double Round Robin"),
         ("knockout", "Knockout"),
         ("double_elimination", "Double Elimination"),
+        ("consolation", "Consolation"),
         ("hybrid", "Hybrid (Groups + Knockout)"),
+    ]
+    SPORT_CHOICES = [
+        ("badminton", "Badminton"),
+        ("tennis", "Tennis"),
+        ("volleyball", "Volleyball"),
+        ("basketball", "Basketball"),
+        ("soccer", "Soccer"),
+        ("cricket", "Cricket"),
+        ("table_tennis", "Table Tennis"),
+        ("other", "Other"),
     ]
     WITHDRAWAL_POLICY_CHOICES = [
         ("forfeit", "Forfeit remaining matches"),
@@ -17,7 +29,14 @@ class Tournament(models.Model):
     ]
 
     name = models.CharField(max_length=200)
+    sport_type = models.CharField(
+        max_length=30, choices=SPORT_CHOICES, default="other",
+        help_text="Type of sport for this tournament",
+    )
     format = models.CharField(max_length=30, choices=FORMAT_CHOICES)
+    players_per_team = models.IntegerField(
+        default=1, help_text="Number of players required per team",
+    )
     status = models.CharField(
         max_length=20,
         choices=[
@@ -108,6 +127,19 @@ class Team(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class Player(models.Model):
+    team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="players"
+    )
+    name = models.CharField(max_length=200)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self):
+        return f"{self.name} ({self.team.name})"
 
 
 class Match(models.Model):
