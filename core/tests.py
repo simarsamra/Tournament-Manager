@@ -20,7 +20,7 @@ class BracketSchedulingTests(TestCase):
 
     def test_knockout_respects_timeslots_and_mutual_court_preferences(self):
         tournament = Tournament.objects.create(name="KO", format="knockout", default_match_duration=30)
-        court_a = Court.objects.create(tournament=tournament, name="Court A")
+        Court.objects.create(tournament=tournament, name="Court A")
         court_b = Court.objects.create(tournament=tournament, name="Court B")
         slot = self._create_slot(tournament)
 
@@ -41,8 +41,7 @@ class BracketSchedulingTests(TestCase):
             self.assertEqual(match.court, court_b)
             self.assertIsNotNone(match.scheduled_time)
             self.assertGreaterEqual(match.scheduled_time, slot.start_time)
-            self.assertLess(match.scheduled_end_time, slot.end_time + timedelta(seconds=1))
-        self.assertNotEqual(court_a, round_one.first().court)
+            self.assertLessEqual(match.scheduled_end_time, slot.end_time)
 
     def test_hybrid_group_matches_use_configured_slots_and_preferences(self):
         tournament = Tournament.objects.create(
@@ -51,7 +50,7 @@ class BracketSchedulingTests(TestCase):
             num_groups=2,
             default_match_duration=30,
         )
-        court_a = Court.objects.create(tournament=tournament, name="Court A")
+        Court.objects.create(tournament=tournament, name="Court A")
         court_b = Court.objects.create(tournament=tournament, name="Court B")
         slot = self._create_slot(tournament)
 
@@ -71,5 +70,4 @@ class BracketSchedulingTests(TestCase):
         for match in group_matches:
             self.assertEqual(match.court, court_b)
             self.assertGreaterEqual(match.scheduled_time, slot.start_time)
-            self.assertLess(match.scheduled_end_time, slot.end_time + timedelta(seconds=1))
-        self.assertNotEqual(court_a, group_matches.first().court)
+            self.assertLessEqual(match.scheduled_end_time, slot.end_time)
