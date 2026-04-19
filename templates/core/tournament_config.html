@@ -11,11 +11,24 @@
         <div class="card-header">Courts ({{ courts.count }})</div>
         <div class="card-body">
             {% for court in courts %}
-            <div class="d-flex justify-between align-center mb-1">
-                <span>{{ court.name }}</span>
-                <span class="badge {% if court.is_available %}badge-active{% else %}badge-withdrawn{% endif %}">
-                    {% if court.is_available %}Available{% else %}Unavailable{% endif %}
-                </span>
+            <div class="mb-1" style="padding:0.5rem;background:#f8f9fa;border-radius:6px;">
+                <div class="d-flex justify-between align-center">
+                    <span>{{ court.name }}</span>
+                    <span class="badge {% if court.is_available %}badge-active{% else %}badge-withdrawn{% endif %}">
+                        {% if court.is_available %}Available{% else %}Unavailable{% endif %}
+                    </span>
+                </div>
+                <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
+                    {% with avails=court.availabilities.all %}
+                        {% if avails %}
+                            {% for avail in avails %}
+                                <div>{{ avail.get_weekday_display }} • {{ avail.start_time|time:"H:i" }} - {{ avail.end_time|time:"H:i" }}{% if avail.start_date or avail.end_date %} • {{ avail.start_date|default:"Any" }} to {{ avail.end_date|default:"Open" }}{% endif %}</div>
+                            {% endfor %}
+                        {% else %}
+                            <span class="text-muted">No recurring availability set yet.</span>
+                        {% endif %}
+                    {% endwith %}
+                </div>
             </div>
             {% empty %}
             <p class="text-muted">No courts added yet.</p>
@@ -32,24 +45,48 @@
         </div>
     </div>
 
-    <!-- Time Slots -->
+    <!-- Availability -->
     <div class="card">
-        <div class="card-header">Time Slots ({{ time_slots.count }})</div>
+        <div class="card-header">Court Availability</div>
         <div class="card-body">
-            {% for ts in time_slots %}
+            {% for ca in court_availabilities %}
             <div class="mb-1" style="font-size:0.85rem;">
-                {{ ts.start_time|date:"M d" }}: {{ ts.start_time|date:"H:i" }} - {{ ts.end_time|date:"H:i" }}
+                <strong>{{ ca.court.name }}</strong> — {{ ca.get_weekday_display }} {{ ca.start_time|time:"H:i" }} - {{ ca.end_time|time:"H:i" }}{% if ca.start_date or ca.end_date %} ({{ ca.start_date|default:"Any" }} to {{ ca.end_date|default:"Open" }}){% endif %}
             </div>
             {% empty %}
-            <p class="text-muted">No time slots. Default slots will be generated.</p>
+            <p class="text-muted">No recurring availability added yet.</p>
             {% endfor %}
             <hr style="margin:1rem 0;">
+            <form method="post" action="{% url 'add_court_availability' pk=tournament.pk %}">
+                {% csrf_token %}
+                <div class="form-group"><label>Court</label>{{ court_availability_form.court }}</div>
+                <div class="form-group"><label>Weekday</label>{{ court_availability_form.weekday }}</div>
+                <div class="grid grid-2">
+                    <div class="form-group"><label>Start</label>{{ court_availability_form.start_time }}</div>
+                    <div class="form-group"><label>End</label>{{ court_availability_form.end_time }}</div>
+                </div>
+                <div class="grid grid-2">
+                    <div class="form-group"><label>Start Date</label>{{ court_availability_form.start_date }}</div>
+                    <div class="form-group"><label>End Date</label>{{ court_availability_form.end_date }}</div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm">Add Availability</button>
+            </form>
+            <hr style="margin:1rem 0;">
+            <h4 style="font-size:0.9rem;margin-bottom:0.5rem;">Manual Extra Slot</h4>
+            {% for ts in time_slots %}
+            <div class="mb-1" style="font-size:0.85rem;">
+                {{ ts.start_time|date:"M d" }}: {{ ts.start_time|date:"H:i" }} - {{ ts.end_time|date:"H:i" }}{% if ts.court %} • {{ ts.court.name }}{% endif %}
+            </div>
+            {% endfor %}
             <form method="post" action="{% url 'add_timeslot' pk=tournament.pk %}">
                 {% csrf_token %}
+                <div class="form-group"><label>Court</label>{{ timeslot_form.court }}</div>
                 <div class="form-group"><label>Date</label>{{ timeslot_form.date }}</div>
-                <div class="form-group"><label>Start</label>{{ timeslot_form.start_time }}</div>
-                <div class="form-group"><label>End</label>{{ timeslot_form.end_time }}</div>
-                <button type="submit" class="btn btn-primary btn-sm">Add Slot</button>
+                <div class="grid grid-2">
+                    <div class="form-group"><label>Start</label>{{ timeslot_form.start_time }}</div>
+                    <div class="form-group"><label>End</label>{{ timeslot_form.end_time }}</div>
+                </div>
+                <button type="submit" class="btn btn-outline btn-sm">Add Slot</button>
             </form>
         </div>
     </div>
@@ -69,6 +106,10 @@
                     Players: {% for p in t.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
                 </div>
                 {% endif %}
+                <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
+                    Preferred courts:
+                    {% for c in t.preferred_courts.all %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% empty %}<span class="text-danger">Not set</span>{% endfor %}
+                </div>
             </div>
             {% empty %}
             <p class="text-muted">No teams registered yet.</p>

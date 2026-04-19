@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib.auth.models import User
-from .models import Tournament, Court, Team, Match, RescheduleRequest, TimeSlot, Player
+from .models import Tournament, Court, Team, Match, RescheduleRequest, TimeSlot, Player, CourtAvailability
 
 
 class TournamentForm(forms.ModelForm):
@@ -8,6 +8,7 @@ class TournamentForm(forms.ModelForm):
         model = Tournament
         fields = [
             "name", "sport_type", "format", "players_per_team",
+            "start_date", "expected_teams_count",
             "points_per_win", "points_per_loss",
             "points_per_draw", "num_groups", "teams_per_group_advance",
             "withdrawal_policy", "default_match_duration",
@@ -17,13 +18,15 @@ class TournamentForm(forms.ModelForm):
             "sport_type": forms.Select(attrs={"class": "form-select"}),
             "format": forms.Select(attrs={"class": "form-select"}),
             "players_per_team": forms.NumberInput(attrs={"class": "form-control", "min": "1"}),
+            "start_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+            "expected_teams_count": forms.NumberInput(attrs={"class": "form-control", "min": "2"}),
             "points_per_win": forms.NumberInput(attrs={"class": "form-control"}),
             "points_per_loss": forms.NumberInput(attrs={"class": "form-control"}),
             "points_per_draw": forms.NumberInput(attrs={"class": "form-control"}),
             "num_groups": forms.NumberInput(attrs={"class": "form-control"}),
             "teams_per_group_advance": forms.NumberInput(attrs={"class": "form-control"}),
             "withdrawal_policy": forms.Select(attrs={"class": "form-select"}),
-            "default_match_duration": forms.NumberInput(attrs={"class": "form-control"}),
+            "default_match_duration": forms.NumberInput(attrs={"class": "form-control", "min": "5"}),
         }
 
 
@@ -38,9 +41,51 @@ class CourtForm(forms.ModelForm):
 
 
 class TimeSlotForm(forms.Form):
+    court = forms.ModelChoiceField(
+        queryset=Court.objects.none(),
+        required=False,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
     date = forms.DateField(widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}))
     start_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
     end_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
+
+    def __init__(self, *args, tournament=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if tournament:
+            self.fields["court"].queryset = Court.objects.filter(tournament=tournament, is_available=True)
+
+
+class CourtAvailabilityForm(forms.ModelForm):
+    class Meta:
+        model = CourtAvailability
+        fields = ["court", "weekday", "start_time", "end_time", "start_date", "end_date", "is_active"]
+        widgets = {
+            "court": forms.Select(attrs={"class": "form-select"}),
+            "weekday": forms.Select(attrs={"class": "form-select"}),
+            "start_time": forms.TimeInput(attrs={"class": "form-control", "type": "time"}),
+            "end_time": forms.TimeInput(attrs={"class": "form-control", "type": "time"}),
+            "start_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+            "end_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+            "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
+        }
+
+    def __init__(self, *args, tournament=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if tournament:
+            self.fields["court"].queryset = Court.objects.filter(tournament=tournament)
+
+    def clean(self):
+        cleaned = super().clean()
+        start = cleaned.get("start_time")
+        end = cleaned.get("end_time")
+        start_date = cleaned.get("start_date")
+        end_date = cleaned.get("end_date")
+        if start and end and end <= start:
+            raise forms.ValidationError("End time must be after start time.")
+        if start_date and end_date and end_date < start_date:
+            raise forms.ValidationError("End date cannot be before start date.")
+        return cleaned
 
 
 class TeamRegistrationForm(forms.Form):
@@ -66,6 +111,20 @@ class TeamRegistrationForm(forms.Form):
         }),
         help_text="One player name per line (real names of team members)"
     )
+    preferred_courts = forms.ModelMultipleChoiceField(
+        queryset=Court.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple(),
+        help_text="Select at least one preferred court when options are available.",
+    )
+
+    def __init__(self, *args, tournament=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tournament = tournament
+        if tournament:
+            courts = Court.objects.filter(tournament=tournament, is_available=True)
+            self.fields["preferred_courts"].queryset = courts
+            self.fields["preferred_courts"].required = courts.exists()
 
     def clean(self):
         cleaned = super().clean()
@@ -73,6 +132,19 @@ class TeamRegistrationForm(forms.Form):
             raise forms.ValidationError("Passwords do not match.")
         if User.objects.filter(username=cleaned.get("username")).exists():
             raise forms.ValidationError("Username already taken.")
+
+        required_players = max(1, (self.tournament.players_per_team if self.tournament else 1))
+        player_names = [
+            line.strip() for line in (cleaned.get("player_names") or "").splitlines() if line.strip()
+        ]
+        if len(player_names) < required_players:
+            raise forms.ValidationError(
+                f"Please provide at least {required_players} player name(s)."
+            )
+
+        courts = cleaned.get("preferred_courts")
+        if self.tournament and self.tournament.courts.filter(is_available=True).exists() and not courts:
+            raise forms.ValidationError("Please select at least one preferred court.")
         return cleaned
 
 

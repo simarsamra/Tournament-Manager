@@ -17,14 +17,19 @@ from django.views.decorators.http import require_POST
 
 from .models import (
     Tournament, Court, TimeSlot, Team, Match,
-    RescheduleRequest, OpenSlot, AuditLog, BackupRecord, Player,
+    RescheduleRequest, OpenSlot, AuditLog, BackupRecord, Player, CourtAvailability,
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
     ScoreSubmitForm, RescheduleForm, TeamPreferencesForm, BulkTeamForm,
-    BulkTeamFileForm,
+    BulkTeamFileForm, CourtAvailabilityForm,
 )
-from .scheduling import generate_fixtures, generate_consolation_if_ready
+from .scheduling import (
+    generate_fixtures,
+    generate_consolation_if_ready,
+    estimate_required_matches,
+    count_available_slots,
+)
 from .standings import calculate_standings, advance_winner, get_bracket_data, check_group_stage_complete
 from .withdrawals import handle_withdrawal
 from .backup import create_backup, validate_backup, restore_backup, list_backups, delete_backup
@@ -101,6 +106,55 @@ def _safe_page_param(request, default=1):
     return page if page > 0 else default
 
 
+def _validate_tournament_ready(tournament):
+    """Return a list of human-friendly reasons a tournament cannot start yet."""
+    errors = []
+    active_teams = list(
+        tournament.teams.filter(status="active").prefetch_related("players", "preferred_courts")
+    )
+    active_count = len(active_teams)
+
+    if active_count < 2:
+        errors.append("Need at least 2 active teams.")
+
+    if tournament.expected_teams_count and active_count != tournament.expected_teams_count:
+        errors.append(
+            f"Registered teams ({active_count}) must match the expected team count ({tournament.expected_teams_count})."
+        )
+
+    required_players = max(1, tournament.players_per_team or 1)
+    insufficient_players = [team.name for team in active_teams if team.players.count() < required_players]
+    if insufficient_players:
+        errors.append(
+            "These teams do not have enough registered players: " + ", ".join(insufficient_players[:5]) + "."
+        )
+
+    if not tournament.courts.filter(is_available=True).exists():
+        errors.append("Add at least one available court before starting.")
+    else:
+        missing_preferences = [team.name for team in active_teams if not team.preferred_courts.exists()]
+        if missing_preferences:
+            errors.append(
+                "These teams still need court preferences: " + ", ".join(missing_preferences[:5]) + "."
+            )
+
+    has_schedule_source = (
+        CourtAvailability.objects.filter(court__tournament=tournament, is_active=True).exists()
+        or tournament.time_slots.exists()
+    )
+    if not has_schedule_source:
+        errors.append("Add court availability or manual time slots before starting.")
+    else:
+        required_matches = estimate_required_matches(tournament, team_count=active_count)
+        available_slots = count_available_slots(tournament)
+        if required_matches and available_slots < required_matches:
+            errors.append(
+                f"Not enough court availability to schedule this tournament ({available_slots} available slots for about {required_matches} matches)."
+            )
+
+    return errors
+
+
 # -- Auth Views --
 
 def login_view(request):
@@ -126,12 +180,12 @@ def logout_view(request):
 
 
 def register_view(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
         messages.error(request, "No tournament has been created yet.")
         return render(request, "core/register.html", {"form": TeamRegistrationForm()})
     if request.method == "POST":
-        form = TeamRegistrationForm(request.POST)
+        form = TeamRegistrationForm(request.POST, tournament=tournament)
         if form.is_valid():
             team_name = form.cleaned_data["team_name"]
             if Team.objects.filter(tournament=tournament, name=team_name).exists():
@@ -150,6 +204,7 @@ def register_view(request):
                 tournament=tournament,
                 name=team_name,
             )
+            team.preferred_courts.set(form.cleaned_data.get("preferred_courts", []))
             # Create player records from player names
             player_names_text = form.cleaned_data.get("player_names", "").strip()
             if player_names_text:
@@ -163,7 +218,7 @@ def register_view(request):
             login(request, user)
             return redirect("dashboard")
     else:
-        form = TeamRegistrationForm()
+        form = TeamRegistrationForm(tournament=tournament)
     return render(request, "core/register.html", {
         "form": form, "tournament": tournament,
         "players_per_team": tournament.players_per_team if tournament else 1,
@@ -245,14 +300,16 @@ def tournament_config(request, pk):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
     request.session["selected_tournament_id"] = tournament.pk
-    teams = tournament.teams.prefetch_related("players").all()
+    teams = tournament.teams.prefetch_related("players", "preferred_courts").all()
     return render(request, "core/tournament_config.html", {
         "tournament": tournament,
         "courts": tournament.courts.all(),
+        "court_availabilities": CourtAvailability.objects.filter(court__tournament=tournament).select_related("court"),
         "teams": teams,
-        "time_slots": tournament.time_slots.all(),
+        "time_slots": tournament.time_slots.select_related("court").all(),
         "court_form": CourtForm(),
-        "timeslot_form": TimeSlotForm(),
+        "timeslot_form": TimeSlotForm(tournament=tournament),
+        "court_availability_form": CourtAvailabilityForm(tournament=tournament),
         "bulk_team_form": BulkTeamForm(),
         "bulk_team_file_form": BulkTeamFileForm(),
         **_tournament_context(request, tournament),
@@ -277,22 +334,54 @@ def add_court(request, pk):
 
 @login_required
 @require_POST
+def add_court_availability(request, pk):
+    if not _is_organizer(request.user):
+        return redirect("dashboard")
+    tournament = get_object_or_404(Tournament, pk=pk)
+    form = CourtAvailabilityForm(request.POST, tournament=tournament)
+    if form.is_valid():
+        availability = form.save()
+        log_action(
+            request,
+            "court_availability_added",
+            f"Availability added for '{availability.court.name}' on {availability.get_weekday_display()}",
+            tournament=tournament,
+        )
+        messages.success(request, "Court availability added.")
+    else:
+        for errs in form.errors.values():
+            for err in errs:
+                messages.error(request, err)
+    return redirect("tournament_config", pk=pk)
+
+
+@login_required
+@require_POST
 def add_timeslot(request, pk):
     if not _is_organizer(request.user):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
-    form = TimeSlotForm(request.POST)
+    form = TimeSlotForm(request.POST, tournament=tournament)
     if form.is_valid():
         date = form.cleaned_data["date"]
         start = form.cleaned_data["start_time"]
         end = form.cleaned_data["end_time"]
+        court = form.cleaned_data.get("court")
         if end <= start:
             messages.error(request, "End time must be after start time.")
             return redirect("tournament_config", pk=pk)
         start_dt = timezone.make_aware(datetime.combine(date, start))
         end_dt = timezone.make_aware(datetime.combine(date, end))
-        TimeSlot.objects.create(tournament=tournament, start_time=start_dt, end_time=end_dt)
-        log_action(request, "timeslot_added", f"Time slot added: {start_dt} - {end_dt}", tournament=tournament)
+        TimeSlot.objects.create(
+            tournament=tournament,
+            court=court,
+            start_time=start_dt,
+            end_time=end_dt,
+        )
+        details = f"Time slot added: {start_dt} - {end_dt}"
+        if court:
+            details += f" on {court.name}"
+        log_action(request, "timeslot_added", details, tournament=tournament)
         messages.success(request, "Time slot added.")
     return redirect("tournament_config", pk=pk)
 
@@ -382,8 +471,10 @@ def start_tournament(request, pk):
     if not _is_organizer(request.user):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
-    if tournament.teams.filter(status="active").count() < 2:
-        messages.error(request, "Need at least 2 teams.")
+    readiness_errors = _validate_tournament_ready(tournament)
+    if readiness_errors:
+        for error in readiness_errors:
+            messages.error(request, error)
         return redirect("tournament_config", pk=pk)
     generate_fixtures(tournament)
     tournament.status = "active"

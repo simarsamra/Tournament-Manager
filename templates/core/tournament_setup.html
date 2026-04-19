@@ -27,6 +27,18 @@
                 {{ form.players_per_team }}
                 <small class="text-muted">Number of players required in each team (e.g., 2 for doubles, 5 for basketball).</small>
             </div>
+            <div class="grid grid-2">
+                <div class="form-group">
+                    <label for="id_start_date">Tournament Start Date</label>
+                    {{ form.start_date }}
+                    <small class="text-muted">Automatic scheduling starts from this date.</small>
+                </div>
+                <div class="form-group">
+                    <label for="id_expected_teams_count">Expected Number of Teams</label>
+                    {{ form.expected_teams_count }}
+                    <small class="text-muted">Starting is blocked until registrations match this count.</small>
+                </div>
+            </div>
             <div class="grid grid-3">
                 <div class="form-group">
                     <label>Points per Win</label>{{ form.points_per_win }}

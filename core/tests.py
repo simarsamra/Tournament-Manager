@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.db import models
 from datetime import timedelta
 
-from .models import Team, Tournament, Match, Court, TimeSlot
+from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player
 from .scheduling import generate_fixtures
 from .standings import calculate_standings, advance_winner
 from .withdrawals import handle_withdrawal
@@ -53,6 +53,7 @@ class UXAndLogicRegressionTests(TestCase):
 				"username": "new_user",
 				"password": "abc12345",
 				"password_confirm": "abc12345",
+				"player_names": "Alice",
 			},
 		)
 
@@ -161,6 +162,130 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(teams_response.context["tournament"].pk, first.pk)
 		self.assertContains(teams_response, "Alpha")
 		self.assertNotContains(teams_response, "Beta")
+
+	def test_tournament_form_saves_start_date_and_expected_teams(self):
+		form = TournamentForm(data={
+			"name": "Planned Event",
+			"format": "round_robin",
+			"sport_type": "table_tennis",
+			"players_per_team": 2,
+			"points_per_win": 3,
+			"points_per_loss": 0,
+			"points_per_draw": 1,
+			"num_groups": 2,
+			"teams_per_group_advance": 1,
+			"withdrawal_policy": "forfeit",
+			"default_match_duration": 35,
+			"start_date": "2026-05-01",
+			"expected_teams_count": 4,
+		})
+
+		self.assertTrue(form.is_valid(), form.errors)
+		tournament = form.save()
+		self.assertEqual(str(tournament.start_date), "2026-05-01")
+		self.assertEqual(tournament.expected_teams_count, 4)
+
+	def test_start_tournament_requires_expected_team_count_and_preferences(self):
+		tournament = self._create_tournament(name="Strict Start")
+		tournament.expected_teams_count = 4
+		tournament.players_per_team = 1
+		tournament.start_date = timezone.localdate() + timedelta(days=1)
+		tournament.save(update_fields=["expected_teams_count", "players_per_team", "start_date"])
+		court = Court.objects.create(tournament=tournament, name="Center Court", is_available=True)
+		CourtAvailability.objects.create(
+			court=court,
+			weekday=(timezone.localdate() + timedelta(days=1)).weekday(),
+			start_time="12:00",
+			end_time="14:00",
+			start_date=timezone.localdate() + timedelta(days=1),
+		)
+		team1 = self._create_team(tournament, "A")
+		team2 = self._create_team(tournament, "B")
+		Player.objects.create(team=team1, name="P1")
+		Player.objects.create(team=team2, name="P2")
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("start_tournament", kwargs={"pk": tournament.pk}),
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		tournament.refresh_from_db()
+		self.assertEqual(tournament.status, "setup")
+		msgs = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("expected" in m.lower() for m in msgs))
+
+		team3 = self._create_team(tournament, "C")
+		team4 = self._create_team(tournament, "D")
+		for team in (team3, team4):
+			Player.objects.create(team=team, name=f"{team.name} Player")
+			team.preferred_courts.add(court)
+		response = self.client.post(
+			reverse("start_tournament", kwargs={"pk": tournament.pk}),
+			follow=True,
+		)
+		msgs = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("preference" in m.lower() for m in msgs))
+
+	def test_start_tournament_requires_full_rosters(self):
+		tournament = self._create_tournament(name="Roster Check")
+		tournament.expected_teams_count = 2
+		tournament.players_per_team = 2
+		tournament.start_date = timezone.localdate() + timedelta(days=1)
+		tournament.save(update_fields=["expected_teams_count", "players_per_team", "start_date"])
+		court = Court.objects.create(tournament=tournament, name="Court 2", is_available=True)
+		CourtAvailability.objects.create(
+			court=court,
+			weekday=tournament.start_date.weekday(),
+			start_time="12:00",
+			end_time="14:00",
+			start_date=tournament.start_date,
+		)
+		for name in ("Red", "Blue"):
+			team = self._create_team(tournament, name)
+			Player.objects.create(team=team, name=f"{name} Player 1")
+			team.preferred_courts.add(court)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("start_tournament", kwargs={"pk": tournament.pk}),
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		msgs = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("players" in m.lower() for m in msgs))
+
+	def test_generate_fixtures_uses_court_availability_slots(self):
+		tournament = self._create_tournament(name="Court Bound")
+		tournament.start_date = timezone.localdate() + timedelta(days=1)
+		tournament.save(update_fields=["start_date"])
+		court = Court.objects.create(tournament=tournament, name="Court 1", is_available=True)
+		CourtAvailability.objects.create(
+			court=court,
+			weekday=tournament.start_date.weekday(),
+			start_time="12:00",
+			end_time="13:00",
+			start_date=tournament.start_date,
+			end_date=tournament.start_date,
+		)
+		team1 = self._create_team(tournament, "Falcons")
+		team2 = self._create_team(tournament, "Wolves")
+		team1.preferred_courts.add(court)
+		team2.preferred_courts.add(court)
+		Player.objects.create(team=team1, name="Falcons Player")
+		Player.objects.create(team=team2, name="Wolves Player")
+
+		generate_fixtures(tournament)
+		match = tournament.matches.first()
+
+		self.assertIsNotNone(match)
+		self.assertEqual(match.court, court)
+		self.assertIsNotNone(match.scheduled_time)
+		self.assertEqual(match.scheduled_time.hour, 12)
+		self.assertEqual(match.scheduled_end_time.hour, 12)
+		self.assertEqual(match.scheduled_end_time.minute, 30)
 
 	def test_knockout_disallows_draw_on_confirm(self):
 		tournament = self._create_tournament(fmt="knockout")
@@ -758,7 +883,7 @@ class TournamentLifecycleTests(TestCase):
 			{
 				"date": (now + timedelta(days=1)).strftime("%Y-%m-%d"),
 				"start_time": "10:00",
-				"end_time": "11:00",
+				"end_time": "12:00",
 			},
 			follow=True,
 		)
@@ -770,12 +895,14 @@ class TournamentLifecycleTests(TestCase):
 			user = User.objects.create_user(
 				username=f"team_user_{i}", password="pass123"
 			)
-			Team.objects.create(
+			team = Team.objects.create(
 				user=user,
 				tournament=tournament,
 				name=f"Team {i}",
 				seed=i,
 			)
+			Player.objects.create(team=team, name=f"Player {i}")
+			team.preferred_courts.add(court)
 
 		# Step 5: Start tournament (generate fixtures)
 		response = self.client.post(

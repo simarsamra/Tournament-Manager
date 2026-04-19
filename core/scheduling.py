@@ -1,10 +1,10 @@
 """Scheduling engine for generating tournament fixtures."""
 import math
 import itertools
-from datetime import timedelta
+from datetime import datetime, timedelta, time
 from django.db import models
 from django.utils import timezone
-from .models import Match, Court, TimeSlot, Team
+from .models import Match, Court, TimeSlot, Team, CourtAvailability
 
 
 def generate_round_robin(tournament):
@@ -330,6 +330,43 @@ def generate_fixtures(tournament):
         generate_hybrid(tournament)
 
 
+def estimate_required_matches(tournament, team_count=None):
+    """Estimate how many match slots are needed for a tournament format."""
+    n = team_count if team_count is not None else tournament.teams.filter(status="active").count()
+    if n < 2:
+        return 0
+
+    if tournament.format == "round_robin":
+        return n * (n - 1) // 2
+    if tournament.format == "double_round_robin":
+        return n * (n - 1)
+    if tournament.format in ("knockout", "consolation"):
+        return n - 1
+    if tournament.format == "double_elimination":
+        return max(n - 1, (2 * n) - 2)
+    if tournament.format == "hybrid":
+        num_groups = max(1, min(tournament.num_groups or 1, n))
+        base_size = n // num_groups
+        remainder = n % num_groups
+        group_matches = 0
+        advancers = 0
+        for idx in range(num_groups):
+            size = base_size + (1 if idx < remainder else 0)
+            if size >= 2:
+                group_matches += size * (size - 1) // 2
+            advancers += min(size, max(1, tournament.teams_per_group_advance))
+        return group_matches + max(0, advancers - 1)
+    return n - 1
+
+
+def count_available_slots(tournament):
+    """Return the number of currently schedulable court-bound slots."""
+    courts = list(tournament.courts.filter(is_available=True))
+    if not courts:
+        return 0
+    return len(_build_slots(tournament, courts))
+
+
 def _assign_schedule(tournament, matches_data):
     """Assign times and courts to match data dicts, then bulk create."""
     courts = list(tournament.courts.filter(is_available=True))
@@ -419,25 +456,62 @@ def _find_preferred_slot(t1, t2, slots, used_slots, pending_matches):
 def _build_slots(tournament, courts):
     """Build available time slots for scheduling."""
     duration = timedelta(minutes=tournament.default_match_duration)
-    time_slots = list(tournament.time_slots.order_by("start_time"))
+    base_date = tournament.start_date or timezone.localdate()
     slots = []
+    seen = set()
+
+    availabilities = list(
+        CourtAvailability.objects.filter(
+            court__tournament=tournament,
+            court__is_available=True,
+            is_active=True,
+        ).select_related("court").order_by("court_id", "weekday", "start_time")
+    )
+    if availabilities:
+        for availability in availabilities:
+            range_start = max(base_date, availability.start_date or base_date)
+            range_end = availability.end_date or (range_start + timedelta(days=60))
+            current_date = range_start
+            while current_date <= range_end:
+                if current_date.weekday() == availability.weekday:
+                    slot_start = timezone.make_aware(datetime.combine(current_date, availability.start_time))
+                    slot_limit = timezone.make_aware(datetime.combine(current_date, availability.end_time))
+                    current = slot_start
+                    while current + duration <= slot_limit:
+                        slot_key = (current, availability.court_id)
+                        if slot_key not in seen:
+                            slots.append((current, current + duration, availability.court))
+                            seen.add(slot_key)
+                        current += duration
+                current_date += timedelta(days=1)
+        return sorted(slots, key=lambda item: (item[0], item[2].id))
+
+    time_slots = list(tournament.time_slots.select_related("court").order_by("start_time"))
     if time_slots:
         for ts in time_slots:
             current = ts.start_time
+            target_courts = [ts.court] if ts.court else courts
             while current + duration <= ts.end_time:
-                for court in courts:
-                    slots.append((current, current + duration, court))
+                for court in target_courts:
+                    slot_key = (current, court.id)
+                    if slot_key not in seen:
+                        slots.append((current, current + duration, court))
+                        seen.add(slot_key)
                 current += duration
-    else:
-        start = timezone.now().replace(hour=9, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        for day_offset in range(30):
-            day_start = start + timedelta(days=day_offset)
-            for hour_offset in range(12):
-                slot_start = day_start + timedelta(minutes=30 * hour_offset)
-                slot_end = slot_start + duration
-                for court in courts:
+        return sorted(slots, key=lambda item: (item[0], item[2].id))
+
+    start = timezone.make_aware(datetime.combine(base_date, time(hour=9, minute=0)))
+    for day_offset in range(30):
+        day_start = start + timedelta(days=day_offset)
+        for hour_offset in range(12):
+            slot_start = day_start + timedelta(minutes=30 * hour_offset)
+            slot_end = slot_start + duration
+            for court in courts:
+                slot_key = (slot_start, court.id)
+                if slot_key not in seen:
                     slots.append((slot_start, slot_end, court))
-    return slots
+                    seen.add(slot_key)
+    return sorted(slots, key=lambda item: (item[0], item[2].id))
 
 
 def _assign_schedule_to_matches(tournament, matches):

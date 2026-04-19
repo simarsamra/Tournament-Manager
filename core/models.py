@@ -49,6 +49,17 @@ class Tournament(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    start_date = models.DateField(
+        default=timezone.localdate,
+        null=True,
+        blank=True,
+        help_text="Date from which automatic scheduling should begin",
+    )
+    expected_teams_count = models.PositiveIntegerField(
+        default=0,
+        blank=True,
+        help_text="Expected number of teams before the tournament can start",
+    )
 
     points_per_win = models.IntegerField(default=3)
     points_per_loss = models.IntegerField(default=0)
@@ -94,6 +105,9 @@ class TimeSlot(models.Model):
     tournament = models.ForeignKey(
         Tournament, on_delete=models.CASCADE, related_name="time_slots"
     )
+    court = models.ForeignKey(
+        "Court", on_delete=models.CASCADE, related_name="time_slots", null=True, blank=True
+    )
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
 
@@ -101,7 +115,37 @@ class TimeSlot(models.Model):
         ordering = ["start_time"]
 
     def __str__(self):
-        return f"{self.start_time.strftime('%Y-%m-%d %H:%M')} - {self.end_time.strftime('%H:%M')}"
+        court_name = f" ({self.court.name})" if self.court else ""
+        return f"{self.start_time.strftime('%Y-%m-%d %H:%M')} - {self.end_time.strftime('%H:%M')}{court_name}"
+
+
+class CourtAvailability(models.Model):
+    WEEKDAY_CHOICES = [
+        (0, "Monday"),
+        (1, "Tuesday"),
+        (2, "Wednesday"),
+        (3, "Thursday"),
+        (4, "Friday"),
+        (5, "Saturday"),
+        (6, "Sunday"),
+    ]
+
+    court = models.ForeignKey(
+        Court, on_delete=models.CASCADE, related_name="availabilities"
+    )
+    weekday = models.IntegerField(choices=WEEKDAY_CHOICES)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["court__name", "weekday", "start_time"]
+
+    def __str__(self):
+        day = dict(self.WEEKDAY_CHOICES).get(self.weekday, self.weekday)
+        return f"{self.court.name}: {day} {self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
 
 
 class Team(models.Model):

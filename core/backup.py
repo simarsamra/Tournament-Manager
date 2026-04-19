@@ -11,12 +11,12 @@ from django.core import serializers
 
 from .models import (
     Tournament, Court, TimeSlot, Team, Match,
-    RescheduleRequest, OpenSlot, AuditLog, BackupRecord,
+    RescheduleRequest, OpenSlot, AuditLog, BackupRecord, CourtAvailability,
 )
 
 
 BACKUP_MODELS = [
-    User, Tournament, Court, TimeSlot, Team, Match,
+    User, Tournament, Court, TimeSlot, CourtAvailability, Team, Match,
     RescheduleRequest, OpenSlot, AuditLog, BackupRecord,
 ]
 

@@ -37,6 +37,12 @@
                 <small class="text-muted">{{ form.player_names.help_text }}</small>
                 {% if form.player_names.errors %}<small class="text-danger">{{ form.player_names.errors.0 }}</small>{% endif %}
             </div>
+            <div class="form-group">
+                <label>Preferred Courts</label>
+                {{ form.preferred_courts }}
+                <small class="text-muted">{{ form.preferred_courts.help_text }}</small>
+                {% if form.preferred_courts.errors %}<small class="text-danger">{{ form.preferred_courts.errors.0 }}</small>{% endif %}
+            </div>
             {% if form.non_field_errors %}
             <div class="alert alert-error">{{ form.non_field_errors.0 }}</div>
             {% endif %}

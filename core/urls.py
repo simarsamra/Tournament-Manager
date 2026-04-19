@@ -15,6 +15,7 @@ urlpatterns = [
     path("tournament/setup/", views.tournament_setup, name="tournament_setup"),
     path("tournament/<int:pk>/config/", views.tournament_config, name="tournament_config"),
     path("tournament/<int:pk>/add-court/", views.add_court, name="add_court"),
+    path("tournament/<int:pk>/add-court-availability/", views.add_court_availability, name="add_court_availability"),
     path("tournament/<int:pk>/add-timeslot/", views.add_timeslot, name="add_timeslot"),
     path("tournament/<int:pk>/add-teams/", views.add_teams_bulk, name="add_teams_bulk"),
     path("tournament/<int:pk>/start/", views.start_tournament, name="start_tournament"),

@@ -1,18 +1,24 @@
 from django.contrib import admin
 from .models import (
     Tournament, Court, TimeSlot, Team, Match,
-    RescheduleRequest, OpenSlot, AuditLog, BackupRecord,
+    RescheduleRequest, OpenSlot, AuditLog, BackupRecord, CourtAvailability,
 )
 
 
 @admin.register(Tournament)
 class TournamentAdmin(admin.ModelAdmin):
-    list_display = ["name", "format", "status", "created_at"]
+    list_display = ["name", "format", "status", "start_date", "expected_teams_count", "created_at"]
 
 
 @admin.register(Court)
 class CourtAdmin(admin.ModelAdmin):
     list_display = ["name", "tournament", "is_available"]
+
+
+@admin.register(CourtAvailability)
+class CourtAvailabilityAdmin(admin.ModelAdmin):
+    list_display = ["court", "weekday", "start_time", "end_time", "start_date", "end_date", "is_active"]
+    list_filter = ["weekday", "is_active", "court__tournament"]
 
 
 @admin.register(Team)
