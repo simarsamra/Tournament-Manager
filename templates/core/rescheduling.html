@@ -2,7 +2,7 @@
 {% block title %}Rescheduling{% endblock %}
 {% block page_header %}Rescheduling{% endblock %}
 {% block content %}
-<h1 class="page-title">Rescheduling</h1>
+<h1 class="page-title">{% if tournament %}{{ tournament.name }} — {% endif %}Rescheduling</h1>
 
 {% if tournament %}
 <div class="grid grid-2">

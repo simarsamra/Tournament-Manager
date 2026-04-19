@@ -2,7 +2,7 @@
 {% block title %}Settings{% endblock %}
 {% block page_header %}Settings{% endblock %}
 {% block content %}
-<h1 class="page-title">Tournament Settings</h1>
+<h1 class="page-title">{% if tournament %}{{ tournament.name }} — {% endif %}Tournament Settings</h1>
 {% if tournament %}
 <div class="card" style="max-width:700px;">
     <div class="card-body">

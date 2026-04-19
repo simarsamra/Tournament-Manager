@@ -3,7 +3,7 @@
 {% block page_header %}Fixtures{% endblock %}
 {% block content %}
 <div class="d-flex justify-between align-center mb-2">
-    <h1 class="page-title" style="margin-bottom:0">Fixtures</h1>
+    <h1 class="page-title" style="margin-bottom:0">{% if tournament %}{{ tournament.name }} — {% endif %}Fixtures</h1>
 </div>
 
 {% if tournament %}

@@ -2,7 +2,7 @@
 {% block title %}Teams{% endblock %}
 {% block page_header %}Teams{% endblock %}
 {% block content %}
-<h1 class="page-title">Teams</h1>
+<h1 class="page-title">{% if tournament %}{{ tournament.name }} — {% endif %}Teams</h1>
 {% if tournament %}
 <div class="card">
     <div class="table-container">

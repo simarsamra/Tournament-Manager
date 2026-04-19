@@ -2,7 +2,7 @@
 {% block title %}Analytics{% endblock %}
 {% block page_header %}Analytics{% endblock %}
 {% block content %}
-<h1 class="page-title">Analytics Dashboard</h1>
+<h1 class="page-title">{% if tournament %}{{ tournament.name }} — {% endif %}Analytics Dashboard</h1>
 
 {% if tournament %}
 <div class="grid grid-4 mb-2">

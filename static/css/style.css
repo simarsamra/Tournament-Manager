@@ -203,6 +203,8 @@ tr:hover { background: #f8fafc; }
 .badge-forfeited { background: #fce7f3; color: #9d174d; }
 .badge-bye { background: #e2e8f0; color: #475569; }
 .badge-active { background: #d1fae5; color: #065f46; }
+.badge-setup { background: #fef3c7; color: #92400e; }
+.badge-completed { background: #e2e8f0; color: #334155; }
 .badge-withdrawn { background: #fecaca; color: #991b1b; }
 .badge-pending { background: #fed7aa; color: #9a3412; }
 .badge-approved { background: #d1fae5; color: #065f46; }

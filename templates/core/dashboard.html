@@ -16,14 +16,74 @@
 {% else %}
 
 {% if is_organizer %}
+<div class="card mb-2">
+    <div class="card-header">Tournament Overview</div>
+    <div class="card-body">
+        <div class="grid grid-4 mb-2">
+            <div class="stat-card">
+                <div class="stat-value">{{ all_tournaments|length }}</div>
+                <div class="stat-label">All Tournaments</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="color:var(--success)">{{ active_tournaments_count|default:"0" }}</div>
+                <div class="stat-label">Active</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="color:var(--warning)">{{ setup_tournaments_count|default:"0" }}</div>
+                <div class="stat-label">Setup</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ completed_tournaments_count|default:"0" }}</div>
+                <div class="stat-label">Completed</div>
+            </div>
+        </div>
+
+        {% if all_tournaments %}
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr><th>Name</th><th>Status</th><th>Format</th><th>Teams</th><th>Matches</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for t in all_tournaments %}
+                    <tr{% if tournament and t.pk == tournament.pk %} style="background:#eff6ff;"{% endif %}>
+                        <td>
+                            <strong>{{ t.name }}</strong>
+                            {% if tournament and t.pk == tournament.pk %}
+                            <div class="text-muted" style="font-size:0.8rem;">Currently selected</div>
+                            {% endif %}
+                        </td>
+                        <td><span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span></td>
+                        <td>{{ t.get_format_display }}</td>
+                        <td>{{ t.team_count }}</td>
+                        <td>{{ t.match_count }}</td>
+                        <td>
+                            <form method="post" action="{% url 'select_tournament' %}" style="display:inline-block;">
+                                {% csrf_token %}
+                                <input type="hidden" name="tournament_id" value="{{ t.pk }}">
+                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                <button type="submit" class="btn btn-outline btn-sm">Open</button>
+                            </form>
+                            <a href="{% url 'tournament_config' pk=t.pk %}" class="btn btn-primary btn-sm">Configure</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% if tournament %}
 <div class="grid grid-4 mb-2">
     <div class="stat-card">
         <div class="stat-value">{{ total_teams|default:"0" }}</div>
-        <div class="stat-label">Teams</div>
+        <div class="stat-label">Selected Teams</div>
     </div>
     <div class="stat-card">
         <div class="stat-value">{{ total_matches|default:"0" }}</div>
-        <div class="stat-label">Total Matches</div>
+        <div class="stat-label">Selected Matches</div>
     </div>
     <div class="stat-card">
         <div class="stat-value">{{ confirmed_matches|default:"0" }}</div>
@@ -41,6 +101,7 @@
         <a href="{% url 'tournament_config' pk=tournament.pk %}" class="btn btn-primary">Configure Tournament</a>
     </div>
 </div>
+{% endif %}
 {% endif %}
 {% endif %}
 

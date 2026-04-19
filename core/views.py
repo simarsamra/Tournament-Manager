@@ -31,8 +31,53 @@ from .backup import create_backup, validate_backup, restore_backup, list_backups
 from .audit import log_action
 
 
-def _get_tournament():
-    return Tournament.objects.order_by("-created_at").first()
+def _get_available_tournaments():
+    return Tournament.objects.annotate(
+        team_count=Count("teams", distinct=True),
+        match_count=Count("matches", distinct=True),
+    ).annotate(
+        status_rank=db_models.Case(
+            db_models.When(status="active", then=db_models.Value(0)),
+            db_models.When(status="setup", then=db_models.Value(1)),
+            db_models.When(status="completed", then=db_models.Value(2)),
+            default=db_models.Value(3),
+            output_field=db_models.IntegerField(),
+        )
+    ).order_by("status_rank", "-created_at")
+
+
+def _get_tournament(request=None):
+    tournaments = Tournament.objects.all()
+    if request and getattr(request, "user", None) and request.user.is_authenticated:
+        team = _get_team(request.user)
+        if team:
+            return team.tournament
+        if _is_organizer(request.user):
+            selected_id = request.GET.get("tournament") or request.session.get("selected_tournament_id")
+            if selected_id and tournaments.filter(pk=selected_id).exists():
+                selected = tournaments.get(pk=selected_id)
+                request.session["selected_tournament_id"] = selected.pk
+                return selected
+    fallback = tournaments.filter(status="active").order_by("-created_at").first()
+    fallback = fallback or tournaments.order_by("-created_at").first()
+    if (
+        fallback
+        and request
+        and getattr(request, "user", None)
+        and request.user.is_authenticated
+        and _is_organizer(request.user)
+    ):
+        request.session["selected_tournament_id"] = fallback.pk
+    return fallback
+
+
+def _tournament_context(request, tournament=None):
+    if not request.user.is_authenticated or not _is_organizer(request.user):
+        return {}
+    return {
+        "available_tournaments": _get_available_tournaments(),
+        "selected_tournament": tournament,
+    }
 
 
 def _get_team(user):
@@ -129,12 +174,13 @@ def register_view(request):
 
 @login_required
 def dashboard_view(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     team = _get_team(request.user)
+    is_organizer = _is_organizer(request.user)
     context = {
         "tournament": tournament,
         "team": team,
-        "is_organizer": _is_organizer(request.user),
+        "is_organizer": is_organizer,
     }
     if tournament and team:
         team_matches = Match.objects.filter(
@@ -152,12 +198,19 @@ def dashboard_view(request):
         context["pending_reschedules"] = RescheduleRequest.objects.filter(
             match__in=team_matches, status="pending",
         ).exclude(requested_by=team)
-    if tournament and _is_organizer(request.user):
+    if is_organizer:
+        all_tournaments = _get_available_tournaments()
+        context["all_tournaments"] = all_tournaments
+        context["active_tournaments_count"] = all_tournaments.filter(status="active").count()
+        context["setup_tournaments_count"] = all_tournaments.filter(status="setup").count()
+        context["completed_tournaments_count"] = all_tournaments.filter(status="completed").count()
+    if tournament and is_organizer:
         context["total_teams"] = tournament.teams.count()
         context["total_matches"] = tournament.matches.count()
         context["confirmed_matches"] = tournament.matches.filter(status="confirmed").count()
         context["pending_matches_count"] = tournament.matches.filter(status="pending_confirmation").count()
         context["disputed_matches"] = tournament.matches.filter(status="disputed").count()
+    context.update(_tournament_context(request, tournament))
     return render(request, "core/dashboard.html", context)
 
 
@@ -172,6 +225,7 @@ def tournament_setup(request):
         form = TournamentForm(request.POST)
         if form.is_valid():
             t = form.save()
+            request.session["selected_tournament_id"] = t.pk
             log_action(request, "tournament_created",
                        f"Tournament '{t.name}' created ({t.get_format_display()})",
                        tournament=t)
@@ -179,7 +233,10 @@ def tournament_setup(request):
             return redirect("tournament_config", pk=t.pk)
     else:
         form = TournamentForm()
-    return render(request, "core/tournament_setup.html", {"form": form})
+    return render(request, "core/tournament_setup.html", {
+        "form": form,
+        **_tournament_context(request, _get_tournament(request)),
+    })
 
 
 @login_required
@@ -187,6 +244,7 @@ def tournament_config(request, pk):
     if not _is_organizer(request.user):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
+    request.session["selected_tournament_id"] = tournament.pk
     teams = tournament.teams.prefetch_related("players").all()
     return render(request, "core/tournament_config.html", {
         "tournament": tournament,
@@ -197,6 +255,7 @@ def tournament_config(request, pk):
         "timeslot_form": TimeSlotForm(),
         "bulk_team_form": BulkTeamForm(),
         "bulk_team_file_form": BulkTeamFileForm(),
+        **_tournament_context(request, tournament),
     })
 
 
@@ -338,13 +397,35 @@ def start_tournament(request, pk):
     return redirect("fixtures")
 
 
+@login_required
+@require_POST
+def select_tournament(request):
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can switch tournaments.")
+        return redirect("dashboard")
+
+    tournament_id = request.POST.get("tournament_id")
+    next_url = request.POST.get("next") or "dashboard"
+    tournament = Tournament.objects.filter(pk=tournament_id).first()
+    if not tournament:
+        messages.error(request, "Tournament not found.")
+        return redirect(next_url)
+
+    request.session["selected_tournament_id"] = tournament.pk
+    messages.success(request, f"Now viewing '{tournament.name}'.")
+    return redirect(next_url)
+
+
 # -- Fixtures --
 
 @login_required
 def fixtures_view(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
-        return render(request, "core/fixtures.html", {"matches": []})
+        return render(request, "core/fixtures.html", {
+            "matches": [],
+            **_tournament_context(request, tournament),
+        })
     matches = tournament.matches.select_related("team1", "team2", "court", "winner")
     status_filter = request.GET.get("status", "")
     team_filter = request.GET.get("team", "")
@@ -389,6 +470,7 @@ def fixtures_view(request):
         "total_pages": total_pages,
         "page_range": range(1, total_pages + 1),
         "team": _get_team(request.user),
+        **_tournament_context(request, tournament),
     })
 
 
@@ -409,6 +491,7 @@ def match_detail(request, pk):
     return render(request, "core/match_detail.html", {
         "match": match,
         "team": team,
+        "tournament": match.tournament,
         "is_participant": is_participant,
         "can_submit": can_submit,
         "can_confirm": can_confirm,
@@ -418,6 +501,7 @@ def match_detail(request, pk):
         "reschedule_form": RescheduleForm(tournament=match.tournament),
         "reschedule_requests": match.reschedule_requests.order_by("-created_at"),
         "is_organizer": _is_organizer(request.user),
+        **_tournament_context(request, match.tournament),
     })
 
 
@@ -647,9 +731,9 @@ def respond_reschedule(request, pk):
 
 @login_required
 def standings_view(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
-        return render(request, "core/standings.html", {})
+        return render(request, "core/standings.html", _tournament_context(request, tournament))
     context = {"tournament": tournament}
     if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
         if tournament.format == "hybrid":
@@ -667,6 +751,7 @@ def standings_view(request):
             context["standings"] = calculate_standings(tournament)
     if tournament.format in ("knockout", "double_elimination", "consolation"):
         context["bracket"] = get_bracket_data(tournament)
+    context.update(_tournament_context(request, tournament))
     return render(request, "core/standings.html", context)
 
 
@@ -674,13 +759,17 @@ def standings_view(request):
 
 @login_required
 def teams_view(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
-        return render(request, "core/teams.html", {"teams": []})
+        return render(request, "core/teams.html", {
+            "teams": [],
+            **_tournament_context(request, tournament),
+        })
     teams = tournament.teams.select_related("user").prefetch_related("players").order_by("name")
     return render(request, "core/teams.html", {
         "tournament": tournament, "teams": teams,
         "is_organizer": _is_organizer(request.user),
+        **_tournament_context(request, tournament),
     })
 
 
@@ -702,6 +791,7 @@ def team_detail(request, pk):
         "players": team.players.all(),
         "is_organizer": _is_organizer(request.user),
         "is_own_team": _get_team(request.user) == team,
+        **_tournament_context(request, tournament),
     })
 
 
@@ -803,19 +893,28 @@ def team_preferences(request, pk):
             tournament=team.tournament,
             initial={"preferred_courts": team.preferred_courts.all(), "availability_notes": team.availability_notes},
         )
-    return render(request, "core/team_preferences.html", {"team": team, "form": form})
+    return render(request, "core/team_preferences.html", {
+        "team": team,
+        "form": form,
+        "tournament": team.tournament,
+        **_tournament_context(request, team.tournament),
+    })
 
 
 # -- Open Slots --
 
 @login_required
 def open_slots_view(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
-        return render(request, "core/open_slots.html", {"slots": []})
+        return render(request, "core/open_slots.html", {
+            "slots": [],
+            **_tournament_context(request, tournament),
+        })
     return render(request, "core/open_slots.html", {
         "tournament": tournament,
         "slots": tournament.open_slots.select_related("court").all(),
+        **_tournament_context(request, tournament),
     })
 
 
@@ -823,9 +922,9 @@ def open_slots_view(request):
 
 @login_required
 def analytics_view(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
-        return render(request, "core/analytics.html", {})
+        return render(request, "core/analytics.html", _tournament_context(request, tournament))
     matches = tournament.matches.all()
     teams = tournament.teams.all()
     match_stats = {
@@ -875,6 +974,7 @@ def analytics_view(request):
     }
     if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
         context["standings"] = calculate_standings(tournament)
+    context.update(_tournament_context(request, tournament))
     return render(request, "core/analytics.html", context)
 
 
@@ -882,9 +982,9 @@ def analytics_view(request):
 
 @login_required
 def rescheduling_view(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
-        return render(request, "core/rescheduling.html", {})
+        return render(request, "core/rescheduling.html", _tournament_context(request, tournament))
     team = _get_team(request.user)
     requests_qs = RescheduleRequest.objects.filter(
         match__tournament=tournament
@@ -896,6 +996,7 @@ def rescheduling_view(request):
     return render(request, "core/rescheduling.html", {
         "tournament": tournament, "requests": requests_qs,
         "open_slots": tournament.open_slots.select_related("court").all(), "team": team,
+        **_tournament_context(request, tournament),
     })
 
 
@@ -906,8 +1007,10 @@ def backup_view(request):
     if not _is_organizer(request.user):
         messages.error(request, "Only organizers can manage backups.")
         return redirect("dashboard")
+    tournament = _get_tournament(request)
     return render(request, "core/backup.html", {
         "backups": list_backups(), "records": BackupRecord.objects.all()[:20],
+        **_tournament_context(request, tournament),
     })
 
 
@@ -918,7 +1021,7 @@ def create_backup_view(request):
         return redirect("dashboard")
     notes = request.POST.get("notes", "")
     record = create_backup(user=request.user, notes=notes)
-    log_action(request, "backup_created", f"Backup created: {record.filename}", tournament=_get_tournament())
+    log_action(request, "backup_created", f"Backup created: {record.filename}", tournament=_get_tournament(request))
     messages.success(request, f"Backup created: {record.filename}")
     return redirect("backup")
 
@@ -962,7 +1065,7 @@ def delete_backup_view(request):
 
 @login_required
 def audit_log_view(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     logs = AuditLog.objects.select_related("user")
     if tournament:
         logs = logs.filter(Q(tournament=tournament) | Q(tournament__isnull=True))
@@ -979,6 +1082,7 @@ def audit_log_view(request):
     return render(request, "core/audit_log.html", {
         "logs": logs, "actions": actions, "action_filter": action_filter,
         "page": page, "total_pages": total_pages, "page_range": range(1, total_pages + 1),
+        **_tournament_context(request, tournament),
     })
 
 
@@ -997,6 +1101,8 @@ def delete_tournament(request, pk):
         return redirect("settings")
 
     tournament_name = tournament.name
+    if request.session.get("selected_tournament_id") == tournament.pk:
+        request.session.pop("selected_tournament_id", None)
     team_user_ids = list(
         tournament.teams.exclude(user__is_staff=True).values_list("user_id", flat=True)
     )
@@ -1017,9 +1123,9 @@ def delete_tournament(request, pk):
 def settings_view(request):
     if not _is_organizer(request.user):
         return redirect("dashboard")
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
-        return render(request, "core/settings.html", {})
+        return render(request, "core/settings.html", _tournament_context(request, tournament))
     if request.method == "POST":
         form = TournamentForm(request.POST, instance=tournament)
         if form.is_valid():
@@ -1029,13 +1135,17 @@ def settings_view(request):
             return redirect("settings")
     else:
         form = TournamentForm(instance=tournament)
-    return render(request, "core/settings.html", {"tournament": tournament, "form": form})
+    return render(request, "core/settings.html", {
+        "tournament": tournament,
+        "form": form,
+        **_tournament_context(request, tournament),
+    })
 
 
 # -- Public Views --
 
 def public_standings(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
         return render(request, "core/public_standings.html", {})
     context = {"tournament": tournament}
@@ -1054,7 +1164,7 @@ def public_standings(request):
 
 
 def public_fixtures(request):
-    tournament = _get_tournament()
+    tournament = _get_tournament(request)
     if not tournament:
         return render(request, "core/public_fixtures.html", {"matches": []})
     matches = tournament.matches.select_related("team1", "team2", "court", "winner").order_by("scheduled_time", "match_number")

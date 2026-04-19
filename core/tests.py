@@ -127,6 +127,41 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertTrue(Tournament.objects.filter(pk=tournament.pk).exists())
 
+	def test_dashboard_shows_multiple_tournaments_to_organizer(self):
+		first = self._create_tournament(name="Spring Cup")
+		second = self._create_tournament(name="Summer Cup")
+		self._create_team(first, "Alpha")
+		self._create_team(second, "Beta")
+		self.client.force_login(self.organizer)
+
+		response = self.client.get(reverse("dashboard"))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertIn("all_tournaments", response.context)
+		self.assertEqual(response.context["all_tournaments"].count(), 2)
+		self.assertContains(response, "Spring Cup")
+		self.assertContains(response, "Summer Cup")
+
+	def test_organizer_can_switch_selected_tournament_across_pages(self):
+		first = self._create_tournament(name="Spring Cup")
+		second = self._create_tournament(name="Summer Cup")
+		self._create_team(first, "Alpha")
+		self._create_team(second, "Beta")
+		self.client.force_login(self.organizer)
+
+		select_response = self.client.post(
+			reverse("select_tournament"),
+			{"tournament_id": first.pk},
+			follow=True,
+		)
+		teams_response = self.client.get(reverse("teams"))
+
+		self.assertEqual(select_response.status_code, 200)
+		self.assertEqual(self.client.session.get("selected_tournament_id"), first.pk)
+		self.assertEqual(teams_response.context["tournament"].pk, first.pk)
+		self.assertContains(teams_response, "Alpha")
+		self.assertNotContains(teams_response, "Beta")
+
 	def test_knockout_disallows_draw_on_confirm(self):
 		tournament = self._create_tournament(fmt="knockout")
 		team1 = self._create_team(tournament, "Red", seed=1)

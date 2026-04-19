@@ -42,6 +42,20 @@
                 <span>{% block page_header %}{% endblock %}</span>
             </div>
             <div class="topbar-right">
+                {% if user.is_staff and available_tournaments %}
+                <form method="post" action="{% url 'select_tournament' %}" style="display:flex;align-items:center;gap:0.5rem;">
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                    <label for="tournament-switch" class="text-muted" style="font-size:0.85rem;">Tournament</label>
+                    <select id="tournament-switch" name="tournament_id" class="form-select" onchange="this.form.submit()" style="min-width:220px;">
+                        {% for t in available_tournaments %}
+                        <option value="{{ t.pk }}" {% if selected_tournament and t.pk == selected_tournament.pk %}selected{% endif %}>
+                            {{ t.name }} • {{ t.get_status_display }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </form>
+                {% endif %}
                 {% if team %}
                 <span class="text-muted">Team: <strong>{{ team.name }}</strong></span>
                 {% elif user.is_staff %}
