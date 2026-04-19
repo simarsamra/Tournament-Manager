@@ -101,6 +101,65 @@ class UXAndLogicRegressionTests(TestCase):
 		messages = [str(m) for m in response.context["messages"]]
 		self.assertTrue(any("End time must be after start time" in m for m in messages))
 
+	def test_add_court_availability_supports_bulk_creation_and_skips_duplicates(self):
+		tournament = self._create_tournament(name="Bulk Availability")
+		court1 = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
+		court2 = Court.objects.create(tournament=tournament, name="Court B", is_available=True)
+		self.client.force_login(self.organizer)
+
+		payload = {
+			"courts": [str(court1.pk), str(court2.pk)],
+			"weekdays": ["0", "2"],
+			"start_time": "09:00",
+			"end_time": "11:00",
+			"start_date": "2026-04-20",
+			"end_date": "2026-04-30",
+			"is_active": "on",
+		}
+
+		response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			payload,
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(CourtAvailability.objects.filter(court__tournament=tournament).count(), 4)
+		messages = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("4" in m and "availability" in m.lower() for m in messages))
+
+		duplicate_response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			payload,
+			follow=True,
+		)
+
+		self.assertEqual(duplicate_response.status_code, 200)
+		self.assertEqual(CourtAvailability.objects.filter(court__tournament=tournament).count(), 4)
+		duplicate_messages = [str(m) for m in duplicate_response.context["messages"]]
+		self.assertTrue(any("skipped" in m.lower() for m in duplicate_messages))
+
+	def test_add_court_availability_rejects_invalid_bulk_time_range(self):
+		tournament = self._create_tournament(name="Bad Availability")
+		court = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			{
+				"courts": [str(court.pk)],
+				"weekdays": ["1"],
+				"start_time": "15:00",
+				"end_time": "14:00",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(CourtAvailability.objects.filter(court__tournament=tournament).count(), 0)
+		messages = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("End time must be after start time" in m for m in messages))
+
 	def test_organizer_can_delete_tournament(self):
 		tournament = self._create_tournament(name="Delete Me")
 		self.client.force_login(self.organizer)

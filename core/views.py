@@ -363,14 +363,58 @@ def add_court_availability(request, pk):
     tournament = get_object_or_404(Tournament, pk=pk)
     form = CourtAvailabilityForm(request.POST, tournament=tournament)
     if form.is_valid():
-        availability = form.save()
-        log_action(
-            request,
-            "court_availability_added",
-            f"Availability added for '{availability.court.name}' on {availability.get_weekday_display()}",
-            tournament=tournament,
+        courts = list(form.cleaned_data["courts"])
+        weekdays = [int(day) for day in form.cleaned_data["weekdays"]]
+        start_time = form.cleaned_data["start_time"]
+        end_time = form.cleaned_data["end_time"]
+        start_date = form.cleaned_data.get("start_date")
+        end_date = form.cleaned_data.get("end_date")
+        is_active = form.cleaned_data.get("is_active", False)
+
+        existing_keys = set(
+            CourtAvailability.objects.filter(
+                court__in=courts,
+                weekday__in=weekdays,
+                start_time=start_time,
+                end_time=end_time,
+                start_date=start_date,
+                end_date=end_date,
+            ).values_list("court_id", "weekday")
         )
-        messages.success(request, "Court availability added.")
+
+        to_create = []
+        skipped_count = 0
+        for court in courts:
+            for weekday in weekdays:
+                key = (court.id, weekday)
+                if key in existing_keys:
+                    skipped_count += 1
+                    continue
+                to_create.append(CourtAvailability(
+                    court=court,
+                    weekday=weekday,
+                    start_time=start_time,
+                    end_time=end_time,
+                    start_date=start_date,
+                    end_date=end_date,
+                    is_active=is_active,
+                ))
+                existing_keys.add(key)
+
+        created_count = len(to_create)
+        if to_create:
+            CourtAvailability.objects.bulk_create(to_create)
+            log_action(
+                request,
+                "court_availability_added",
+                f"Added {created_count} availability entries across {len(courts)} court(s)",
+                tournament=tournament,
+            )
+            messages.success(request, f"Added {created_count} availability entr{'y' if created_count == 1 else 'ies'}.")
+        if skipped_count:
+            messages.warning(request, f"Skipped {skipped_count} duplicate entr{'y' if skipped_count == 1 else 'ies'}.")
+        if not created_count and not skipped_count:
+            messages.warning(request, "No court availability was added.")
     else:
         for errs in form.errors.values():
             for err in errs:

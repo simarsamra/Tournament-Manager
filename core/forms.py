@@ -56,24 +56,39 @@ class TimeSlotForm(forms.Form):
             self.fields["court"].queryset = Court.objects.filter(tournament=tournament, is_available=True)
 
 
-class CourtAvailabilityForm(forms.ModelForm):
-    class Meta:
-        model = CourtAvailability
-        fields = ["court", "weekday", "start_time", "end_time", "start_date", "end_date", "is_active"]
-        widgets = {
-            "court": forms.Select(attrs={"class": "form-select"}),
-            "weekday": forms.Select(attrs={"class": "form-select"}),
-            "start_time": forms.TimeInput(attrs={"class": "form-control", "type": "time"}),
-            "end_time": forms.TimeInput(attrs={"class": "form-control", "type": "time"}),
-            "start_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
-            "end_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
-            "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        }
+class CourtAvailabilityForm(forms.Form):
+    courts = forms.ModelMultipleChoiceField(
+        queryset=Court.objects.none(),
+        widget=forms.CheckboxSelectMultiple(),
+        error_messages={"required": "Select at least one court."},
+        help_text="Apply this schedule to one or more courts at once.",
+    )
+    weekdays = forms.MultipleChoiceField(
+        choices=CourtAvailability.WEEKDAY_CHOICES,
+        widget=forms.CheckboxSelectMultiple(),
+        error_messages={"required": "Select at least one weekday."},
+        help_text="Choose every day that should reuse this time range.",
+    )
+    start_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
+    end_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
+    start_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+    )
+    end_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+    )
+    is_active = forms.BooleanField(
+        required=False,
+        initial=True,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
 
     def __init__(self, *args, tournament=None, **kwargs):
         super().__init__(*args, **kwargs)
         if tournament:
-            self.fields["court"].queryset = Court.objects.filter(tournament=tournament)
+            self.fields["courts"].queryset = Court.objects.filter(tournament=tournament).order_by("name")
 
     def clean(self):
         cleaned = super().clean()

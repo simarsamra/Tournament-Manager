@@ -30,4 +30,28 @@ document.addEventListener('DOMContentLoaded', function() {
             this.closest('form').submit();
         });
     });
+
+    // Bulk checkbox shortcuts for availability forms
+    document.querySelectorAll('[data-check-target]').forEach(function(button) {
+        button.addEventListener('click', function() {
+            const target = this.getAttribute('data-check-target');
+            const mode = this.getAttribute('data-check-mode');
+            const container = document.querySelector('[data-check-group="' + target + '"]');
+            if (!container) {
+                return;
+            }
+
+            container.querySelectorAll('input[type="checkbox"]').forEach(function(checkbox) {
+                if (mode === 'all') {
+                    checkbox.checked = true;
+                } else if (mode === 'none') {
+                    checkbox.checked = false;
+                } else if (mode === 'weekdays') {
+                    checkbox.checked = ['0', '1', '2', '3', '4'].includes(checkbox.value);
+                } else if (mode === 'weekend') {
+                    checkbox.checked = ['5', '6'].includes(checkbox.value);
+                }
+            });
+        });
+    });
 });

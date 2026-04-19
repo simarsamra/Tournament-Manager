@@ -57,10 +57,36 @@
             <p class="text-muted">No recurring availability added yet.</p>
             {% endfor %}
             <hr style="margin:1rem 0;">
+            <p class="text-muted" style="font-size:0.85rem;">Select multiple courts and weekdays once, then apply the same hours in a single step. Existing duplicates are skipped automatically.</p>
             <form method="post" action="{% url 'add_court_availability' pk=tournament.pk %}">
                 {% csrf_token %}
-                <div class="form-group"><label>Court</label>{{ court_availability_form.court }}</div>
-                <div class="form-group"><label>Weekday</label>{{ court_availability_form.weekday }}</div>
+                <div class="form-group">
+                    <div class="d-flex justify-between align-center" style="gap:0.5rem;flex-wrap:wrap;">
+                        <label>Courts</label>
+                        <div class="d-flex" style="gap:0.35rem;flex-wrap:wrap;">
+                            <button type="button" class="btn btn-outline btn-sm" data-check-target="courts" data-check-mode="all">All Courts</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-check-target="courts" data-check-mode="none">Clear</button>
+                        </div>
+                    </div>
+                    <div data-check-group="courts" style="padding:0.75rem;border:1px solid #e0e0e0;border-radius:6px;max-height:150px;overflow:auto;background:#fafafa;">
+                        {{ court_availability_form.courts }}
+                    </div>
+                    <small class="text-muted">Apply one recurring schedule to any number of courts.</small>
+                </div>
+                <div class="form-group">
+                    <div class="d-flex justify-between align-center" style="gap:0.5rem;flex-wrap:wrap;">
+                        <label>Weekdays</label>
+                        <div class="d-flex" style="gap:0.35rem;flex-wrap:wrap;">
+                            <button type="button" class="btn btn-outline btn-sm" data-check-target="weekdays" data-check-mode="weekdays">Weekdays</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-check-target="weekdays" data-check-mode="weekend">Weekend</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-check-target="weekdays" data-check-mode="all">Every Day</button>
+                            <button type="button" class="btn btn-outline btn-sm" data-check-target="weekdays" data-check-mode="none">Clear</button>
+                        </div>
+                    </div>
+                    <div data-check-group="weekdays" style="padding:0.75rem;border:1px solid #e0e0e0;border-radius:6px;background:#fafafa;">
+                        {{ court_availability_form.weekdays }}
+                    </div>
+                </div>
                 <div class="grid grid-2">
                     <div class="form-group"><label>Start</label>{{ court_availability_form.start_time }}</div>
                     <div class="form-group"><label>End</label>{{ court_availability_form.end_time }}</div>
@@ -69,7 +95,13 @@
                     <div class="form-group"><label>Start Date</label>{{ court_availability_form.start_date }}</div>
                     <div class="form-group"><label>End Date</label>{{ court_availability_form.end_date }}</div>
                 </div>
-                <button type="submit" class="btn btn-primary btn-sm">Add Availability</button>
+                <div class="form-group">
+                    <label class="d-flex align-center" style="gap:0.5rem;">
+                        {{ court_availability_form.is_active }}
+                        <span>Availability is active immediately</span>
+                    </label>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm">Apply Availability</button>
             </form>
             <hr style="margin:1rem 0;">
             <h4 style="font-size:0.9rem;margin-bottom:0.5rem;">Manual Extra Slot</h4>
