@@ -1,6 +1,7 @@
 from django import forms
 from django.contrib.auth.models import User
-from .models import Tournament, Court, Team, Match, RescheduleRequest, TimeSlot, Player, CourtAvailability
+from django.utils import timezone
+from .models import Tournament, Court, Team, Match, RescheduleRequest, TimeSlot, Player, CourtAvailability, OpenSlot
 
 
 class TournamentForm(forms.ModelForm):
@@ -195,8 +196,20 @@ class ScoreSubmitForm(forms.Form):
 
 
 class RescheduleForm(forms.Form):
-    new_date = forms.DateField(widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}))
-    new_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
+    open_slot = forms.ModelChoiceField(
+        queryset=OpenSlot.objects.none(),
+        required=False,
+        empty_label="Select an available open slot",
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    new_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+    )
+    new_time = forms.TimeField(
+        required=False,
+        widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}),
+    )
     new_court = forms.ModelChoiceField(
         queryset=Court.objects.none(),
         required=False,
@@ -210,9 +223,22 @@ class RescheduleForm(forms.Form):
     def __init__(self, *args, tournament=None, **kwargs):
         super().__init__(*args, **kwargs)
         if tournament:
+            self.fields["open_slot"].queryset = OpenSlot.objects.filter(
+                tournament=tournament,
+                end_time__gt=timezone.now(),
+            ).select_related("court").order_by("start_time")
             self.fields["new_court"].queryset = Court.objects.filter(
                 tournament=tournament, is_available=True
             )
+
+    def clean(self):
+        cleaned = super().clean()
+        open_slot = cleaned.get("open_slot")
+        new_date = cleaned.get("new_date")
+        new_time = cleaned.get("new_time")
+        if not open_slot and (not new_date or not new_time):
+            raise forms.ValidationError("Choose an open slot or enter a new date and time.")
+        return cleaned
 
 
 class TeamPreferencesForm(forms.Form):

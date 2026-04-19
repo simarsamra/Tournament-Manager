@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.db import models
 from datetime import timedelta
 
-from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player
+from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player, OpenSlot, RescheduleRequest
 from .scheduling import generate_fixtures
 from .standings import calculate_standings, advance_winner
 from .withdrawals import handle_withdrawal
@@ -545,6 +545,67 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(slot.court, court)
 		self.assertEqual(slot.start_time, match.scheduled_time)
 		self.assertEqual(slot.end_time, match.scheduled_end_time)
+
+	def test_open_slots_view_syncs_completed_future_matches(self):
+		tournament = self._create_tournament(name="Synced Open Slots")
+		court = Court.objects.create(tournament=tournament, name="Court Sync", is_available=True)
+		team1 = self._create_team(tournament, "Sync A", username="sync_a_user")
+		team2 = self._create_team(tournament, "Sync B", username="sync_b_user")
+		Match.objects.create(
+			tournament=tournament,
+			match_number=2,
+			team1=team1,
+			team2=team2,
+			court=court,
+			scheduled_time=timezone.now() + timedelta(days=2),
+			scheduled_end_time=timezone.now() + timedelta(days=2, minutes=30),
+			status="confirmed",
+			winner=team1,
+		)
+
+		self.client.force_login(self.organizer)
+		response = self.client.get(reverse("open_slots"))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(len(response.context["slots"]), 1)
+		slot = response.context["slots"][0]
+		self.assertEqual(slot.court, court)
+
+	def test_request_reschedule_can_use_open_slot_choice(self):
+		tournament = self._create_tournament(name="Open Slot Choice")
+		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
+		alt_court = Court.objects.create(tournament=tournament, name="Alt", is_available=True)
+		team1 = self._create_team(tournament, "Res A", username="res_a_user")
+		team2 = self._create_team(tournament, "Res B", username="res_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=3,
+			team1=team1,
+			team2=team2,
+			court=primary_court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		slot = OpenSlot.objects.create(
+			tournament=tournament,
+			court=alt_court,
+			start_time=timezone.now() + timedelta(days=3),
+			end_time=timezone.now() + timedelta(days=3, minutes=30),
+			reason="Free slot",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.post(
+			reverse("request_reschedule", kwargs={"pk": match.pk}),
+			{"open_slot": str(slot.pk), "reason": "Use free slot"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		rr = RescheduleRequest.objects.get(match=match, requested_by=team1)
+		self.assertEqual(rr.new_time, slot.start_time)
+		self.assertEqual(rr.new_court, alt_court)
 
 	def test_knockout_disallows_draw_on_confirm(self):
 		tournament = self._create_tournament(fmt="knockout")

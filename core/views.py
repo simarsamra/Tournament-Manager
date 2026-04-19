@@ -181,6 +181,20 @@ def _create_open_slot_for_completed_match(match, reason):
     return slot
 
 
+def _sync_open_slots_for_tournament(tournament):
+    """Ensure future completed matches expose their freed slots without duplicates."""
+    if not tournament:
+        return
+
+    matches = tournament.matches.filter(
+        status__in=["confirmed", "forfeited", "cancelled"],
+        scheduled_time__isnull=False,
+        court__isnull=False,
+    )
+    for match in matches:
+        _create_open_slot_for_completed_match(match, f"Completed early: {match}")
+
+
 # -- Auth Views --
 
 def login_view(request):
@@ -724,6 +738,7 @@ def match_detail(request, pk):
         Match.objects.select_related("team1", "team2", "court", "winner", "submitted_by", "confirmed_by"),
         pk=pk,
     )
+    _sync_open_slots_for_tournament(match.tournament)
     team = _get_team(request.user)
     is_participant = team and (match.team1 == team or match.team2 == team)
     can_submit = is_participant and match.status in ("upcoming", "in_progress")
@@ -904,10 +919,15 @@ def request_reschedule(request, pk):
         return redirect("match_detail", pk=pk)
     form = RescheduleForm(request.POST, tournament=match.tournament)
     if form.is_valid():
-        new_dt = timezone.make_aware(
-            datetime.combine(form.cleaned_data["new_date"], form.cleaned_data["new_time"])
-        )
-        new_court = form.cleaned_data.get("new_court") or match.court
+        open_slot = form.cleaned_data.get("open_slot")
+        if open_slot:
+            new_dt = open_slot.start_time
+            new_court = open_slot.court
+        else:
+            new_dt = timezone.make_aware(
+                datetime.combine(form.cleaned_data["new_date"], form.cleaned_data["new_time"])
+            )
+            new_court = form.cleaned_data.get("new_court") or match.court
         duration = timedelta(minutes=match.tournament.default_match_duration)
         end_dt = new_dt + duration
         conflicts = Match.objects.filter(
@@ -935,6 +955,10 @@ def request_reschedule(request, pk):
                    f"Reschedule requested for {match} to {new_dt}",
                    tournament=match.tournament)
         messages.success(request, "Reschedule request sent.")
+    else:
+        for errs in form.errors.values():
+            for err in errs:
+                messages.error(request, err)
     return redirect("match_detail", pk=pk)
 
 
@@ -956,13 +980,19 @@ def respond_reschedule(request, pk):
         rr.responded_at = timezone.now()
         rr.save()
         if match.scheduled_time and match.court:
-            OpenSlot.objects.create(
+            OpenSlot.objects.get_or_create(
                 tournament=match.tournament, court=match.court,
                 start_time=match.scheduled_time,
                 end_time=match.scheduled_end_time or match.scheduled_time,
-                reason=f"Rescheduled: {match}",
+                defaults={"reason": f"Rescheduled: {match}"},
             )
         duration = timedelta(minutes=match.tournament.default_match_duration)
+        target_court = rr.new_court or match.court
+        OpenSlot.objects.filter(
+            tournament=match.tournament,
+            court=target_court,
+            start_time=rr.new_time,
+        ).delete()
         match.scheduled_time = rr.new_time
         match.scheduled_end_time = rr.new_time + duration
         if rr.new_court:
@@ -1166,9 +1196,10 @@ def open_slots_view(request):
             "slots": [],
             **_tournament_context(request, tournament),
         })
+    _sync_open_slots_for_tournament(tournament)
     return render(request, "core/open_slots.html", {
         "tournament": tournament,
-        "slots": tournament.open_slots.select_related("court").all(),
+        "slots": tournament.open_slots.select_related("court").filter(end_time__gt=timezone.now()),
         **_tournament_context(request, tournament),
     })
 
@@ -1240,6 +1271,7 @@ def rescheduling_view(request):
     tournament = _get_tournament(request)
     if not tournament:
         return render(request, "core/rescheduling.html", _tournament_context(request, tournament))
+    _sync_open_slots_for_tournament(tournament)
     team = _get_team(request.user)
     requests_qs = RescheduleRequest.objects.filter(
         match__tournament=tournament
@@ -1250,7 +1282,7 @@ def rescheduling_view(request):
         )
     return render(request, "core/rescheduling.html", {
         "tournament": tournament, "requests": requests_qs,
-        "open_slots": tournament.open_slots.select_related("court").all(), "team": team,
+        "open_slots": tournament.open_slots.select_related("court").filter(end_time__gt=timezone.now()), "team": team,
         **_tournament_context(request, tournament),
     })
 

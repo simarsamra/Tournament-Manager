@@ -125,6 +125,10 @@
             <div class="card-body">
                 <form method="post" action="{% url 'request_reschedule' pk=match.pk %}">
                     {% csrf_token %}
+                    <div class="form-group">
+                        <label>Choose Open Slot</label>{{ reschedule_form.open_slot }}
+                        <small class="text-muted">Pick a free slot directly, or leave this blank and enter a manual date/time below.</small>
+                    </div>
                     <div class="grid grid-2">
                         <div class="form-group">
                             <label>New Date</label>{{ reschedule_form.new_date }}
