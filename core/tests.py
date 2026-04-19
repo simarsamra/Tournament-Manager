@@ -98,6 +98,35 @@ class UXAndLogicRegressionTests(TestCase):
 		messages = [str(m) for m in response.context["messages"]]
 		self.assertTrue(any("End time must be after start time" in m for m in messages))
 
+	def test_organizer_can_delete_tournament(self):
+		tournament = self._create_tournament(name="Delete Me")
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("delete_tournament", kwargs={"pk": tournament.pk}),
+			{"confirm_delete": "DELETE"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertFalse(Tournament.objects.filter(pk=tournament.pk).exists())
+		msgs = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("deleted" in m.lower() for m in msgs))
+
+	def test_non_organizer_cannot_delete_tournament(self):
+		tournament = self._create_tournament(name="Keep Me")
+		team = self._create_team(tournament, "Falcons")
+		self.client.force_login(team.user)
+
+		response = self.client.post(
+			reverse("delete_tournament", kwargs={"pk": tournament.pk}),
+			{"confirm_delete": "DELETE"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(Tournament.objects.filter(pk=tournament.pk).exists())
+
 	def test_knockout_disallows_draw_on_confirm(self):
 		tournament = self._create_tournament(fmt="knockout")
 		team1 = self._create_team(tournament, "Red", seed=1)

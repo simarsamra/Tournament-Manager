@@ -985,6 +985,35 @@ def audit_log_view(request):
 # -- Settings --
 
 @login_required
+@require_POST
+def delete_tournament(request, pk):
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can delete tournaments.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=pk)
+    if request.POST.get("confirm_delete", "").strip().upper() != "DELETE":
+        messages.error(request, "Tournament deletion was not confirmed.")
+        return redirect("settings")
+
+    tournament_name = tournament.name
+    team_user_ids = list(
+        tournament.teams.exclude(user__is_staff=True).values_list("user_id", flat=True)
+    )
+    tournament.delete()
+    if team_user_ids:
+        User.objects.filter(
+            id__in=team_user_ids,
+            is_staff=False,
+            is_superuser=False,
+        ).delete()
+
+    log_action(request, "tournament_deleted", f"Tournament '{tournament_name}' deleted")
+    messages.success(request, f"Tournament '{tournament_name}' deleted.")
+    return redirect("dashboard")
+
+
+@login_required
 def settings_view(request):
     if not _is_organizer(request.user):
         return redirect("dashboard")
