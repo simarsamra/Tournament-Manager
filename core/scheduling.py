@@ -255,7 +255,7 @@ def _build_slots(tournament, courts, duration):
     return slots
 
 
-def _find_preferred_slot(slots, used_slots, pending_matches, t1, t2, preferred_court_ids=None):
+def _find_preferred_slot(slots, used_slots, scheduled_matches, t1, t2, preferred_court_ids=None):
     """Find next available slot, optionally restricted to preferred courts."""
     for start_t, end_t, court in slots:
         slot_key = (start_t, court.id)
@@ -263,7 +263,7 @@ def _find_preferred_slot(slots, used_slots, pending_matches, t1, t2, preferred_c
             continue
         if preferred_court_ids is not None and court.id not in preferred_court_ids:
             continue
-        if _has_team_conflict(t1, t2, start_t, end_t, used_slots, pending_matches):
+        if _has_team_conflict(t1, t2, start_t, end_t, used_slots, scheduled_matches):
             continue
         return start_t, end_t, court
     return None, None, None
@@ -346,7 +346,7 @@ def _assign_schedule_to_existing_matches(tournament, matches):
     duration = timedelta(minutes=tournament.default_match_duration)
     slots = _build_slots(tournament, courts, duration)
     used_slots = set()
-    pending_matches = []
+    scheduled_matches = []
 
     for match in matches:
         if match.status == "bye":
@@ -361,14 +361,14 @@ def _assign_schedule_to_existing_matches(tournament, matches):
         start_t = end_t = court = None
         if mutual_prefs:
             start_t, end_t, court = _find_preferred_slot(
-                slots, used_slots, pending_matches, t1, t2, mutual_prefs
+                slots, used_slots, scheduled_matches, t1, t2, mutual_prefs
             )
         if start_t is None:
             start_t, end_t, court = _find_preferred_slot(
-                slots, used_slots, pending_matches, t1, t2
+                slots, used_slots, scheduled_matches, t1, t2
             )
         if start_t is None:
-            pending_matches.append(match)
+            scheduled_matches.append(match)
             continue
 
         match.scheduled_time = start_t
@@ -376,4 +376,4 @@ def _assign_schedule_to_existing_matches(tournament, matches):
         match.court = court
         match.save(update_fields=["scheduled_time", "scheduled_end_time", "court"])
         used_slots.add((start_t, court.id))
-        pending_matches.append(match)
+        scheduled_matches.append(match)
