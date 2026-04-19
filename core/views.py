@@ -930,22 +930,28 @@ def request_reschedule(request, pk):
             new_court = form.cleaned_data.get("new_court") or match.court
         duration = timedelta(minutes=match.tournament.default_match_duration)
         end_dt = new_dt + duration
+        active_match_statuses = ["upcoming", "in_progress", "pending_confirmation", "disputed"]
         conflicts = Match.objects.filter(
-            tournament=match.tournament, court=new_court,
-            scheduled_time__lt=end_dt, scheduled_end_time__gt=new_dt,
-        ).exclude(pk=match.pk).exclude(status__in=["cancelled", "forfeited"])
+            tournament=match.tournament,
+            court=new_court,
+            scheduled_time__lt=end_dt,
+            scheduled_end_time__gt=new_dt,
+            status__in=active_match_statuses,
+        ).exclude(pk=match.pk)
         if conflicts.exists():
             messages.error(request, "The selected slot has a conflict.")
             return redirect("match_detail", pk=pk)
 
-        same_day_team_conflicts = Match.objects.filter(
+        overlapping_team_conflicts = Match.objects.filter(
             tournament=match.tournament,
-            scheduled_time__date=new_dt.date(),
+            scheduled_time__lt=end_dt,
+            scheduled_end_time__gt=new_dt,
+            status__in=active_match_statuses,
         ).filter(
             Q(team1=match.team1) | Q(team2=match.team1) | Q(team1=match.team2) | Q(team2=match.team2)
-        ).exclude(pk=match.pk).exclude(status__in=["cancelled", "forfeited", "bye"])
-        if same_day_team_conflicts.exists():
-            messages.error(request, "A team in this match already has another match scheduled on that day.")
+        ).exclude(pk=match.pk)
+        if overlapping_team_conflicts.exists():
+            messages.error(request, "A team in this match already has another match scheduled at that time.")
             return redirect("match_detail", pk=pk)
         RescheduleRequest.objects.create(
             match=match, requested_by=team, new_time=new_dt,

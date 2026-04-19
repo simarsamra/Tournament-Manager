@@ -639,6 +639,103 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertContains(response, alt_court.name)
 		self.assertContains(response, timezone.localtime(slot.start_time).strftime("%b %d, %Y"))
 
+	def test_request_reschedule_accepts_open_slot_backed_by_completed_match(self):
+		tournament = self._create_tournament(name="Completed Match Slot")
+		current_court = Court.objects.create(tournament=tournament, name="Current", is_available=True)
+		open_court = Court.objects.create(tournament=tournament, name="Open Court", is_available=True)
+		team1 = self._create_team(tournament, "Team 9", username="team9_user")
+		team2 = self._create_team(tournament, "Team 10", username="team10_user")
+		other1 = self._create_team(tournament, "Other A", username="other_a_user")
+		other2 = self._create_team(tournament, "Other B", username="other_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=5,
+			team1=team1,
+			team2=team2,
+			court=current_court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		slot_start = timezone.now() + timedelta(days=3)
+		Match.objects.create(
+			tournament=tournament,
+			match_number=6,
+			team1=other1,
+			team2=other2,
+			court=open_court,
+			scheduled_time=slot_start,
+			scheduled_end_time=slot_start + timedelta(minutes=30),
+			status="confirmed",
+			winner=other1,
+		)
+		slot = OpenSlot.objects.create(
+			tournament=tournament,
+			court=open_court,
+			start_time=slot_start,
+			end_time=slot_start + timedelta(minutes=30),
+			reason="Finished early",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.post(
+			reverse("request_reschedule", kwargs={"pk": match.pk}),
+			{"open_slot": str(slot.pk), "reason": "Move to open slot"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(RescheduleRequest.objects.filter(match=match, requested_by=team1).exists())
+		self.assertFalse(any("conflict" in str(m).lower() for m in response.context["messages"]))
+
+	def test_request_reschedule_allows_same_day_if_times_do_not_overlap(self):
+		tournament = self._create_tournament(name="Same Day Reschedule")
+		court1 = Court.objects.create(tournament=tournament, name="Court 1", is_available=True)
+		court2 = Court.objects.create(tournament=tournament, name="Court 2", is_available=True)
+		team9 = self._create_team(tournament, "Team 9", username="same_day_team9")
+		team10 = self._create_team(tournament, "Team 10", username="same_day_team10")
+		other_team = self._create_team(tournament, "Other Team", username="same_day_other")
+		third_team = self._create_team(tournament, "Third Team", username="same_day_third")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=7,
+			team1=team9,
+			team2=team10,
+			court=court1,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		same_day_start = timezone.now() + timedelta(days=2)
+		Match.objects.create(
+			tournament=tournament,
+			match_number=8,
+			team1=team9,
+			team2=other_team,
+			court=court1,
+			scheduled_time=same_day_start,
+			scheduled_end_time=same_day_start + timedelta(minutes=30),
+			status="upcoming",
+		)
+		slot = OpenSlot.objects.create(
+			tournament=tournament,
+			court=court2,
+			start_time=same_day_start + timedelta(hours=2),
+			end_time=same_day_start + timedelta(hours=2, minutes=30),
+			reason="Later same-day opening",
+		)
+
+		self.client.force_login(team10.user)
+		response = self.client.post(
+			reverse("request_reschedule", kwargs={"pk": match.pk}),
+			{"open_slot": str(slot.pk), "reason": "Later the same day"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(RescheduleRequest.objects.filter(match=match, requested_by=team10).exists())
+		self.assertFalse(any("already has another match scheduled on that day" in str(m).lower() for m in response.context["messages"]))
+
 	def test_knockout_disallows_draw_on_confirm(self):
 		tournament = self._create_tournament(fmt="knockout")
 		team1 = self._create_team(tournament, "Red", seed=1)
