@@ -1403,6 +1403,87 @@ class WithdrawalPolicyTests(TestCase):
 		match.refresh_from_db()
 		self.assertEqual(match.status, "upcoming")
 
+	def test_team_can_report_opponent_no_show_and_see_dashboard_notice(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		team_a = self._create_team(tournament, "Team A", username="team_a_no_show", seed=1)
+		team_b = self._create_team(tournament, "Team B", username="team_b_no_show", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+
+		self.client.force_login(team_b.user)
+		response = self.client.post(
+			reverse("report_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team_a.pk)},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		match.refresh_from_db()
+		self.assertEqual(match.status, "upcoming")
+		self.assertEqual(match.no_show_reports.filter(status="pending").count(), 1)
+		self.assertContains(response, "No-show reported")
+
+		self.client.force_login(team_a.user)
+		response = self.client.get(reverse("dashboard"))
+		self.assertContains(response, "No-show notice")
+
+	def test_reschedule_request_by_reported_team_clears_pending_no_show(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		court = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
+		team_a = self._create_team(tournament, "Team A", username="team_a_reschedule", seed=1)
+		team_b = self._create_team(tournament, "Team B", username="team_b_reschedule", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+		match.court = court
+		match.scheduled_time = timezone.now() + timedelta(days=1)
+		match.scheduled_end_time = match.scheduled_time + timedelta(minutes=30)
+		match.save(update_fields=["court", "scheduled_time", "scheduled_end_time"])
+
+		self.client.force_login(team_b.user)
+		self.client.post(
+			reverse("report_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team_a.pk)},
+			follow=True,
+		)
+
+		self.client.force_login(team_a.user)
+		response = self.client.post(
+			reverse("request_reschedule", kwargs={"pk": match.pk}),
+			{
+				"new_date": (timezone.localdate() + timedelta(days=2)).isoformat(),
+				"new_time": "11:00",
+				"new_court": str(court.pk),
+				"reason": "We were delayed but can still play.",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(match.no_show_reports.filter(status="pending").count(), 0)
+
+	def test_pending_no_show_auto_forfeits_after_deadline(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		team_a = self._create_team(tournament, "Team A", username="team_a_auto", seed=1)
+		team_b = self._create_team(tournament, "Team B", username="team_b_auto", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+
+		self.client.force_login(team_b.user)
+		self.client.post(
+			reverse("report_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team_a.pk)},
+			follow=True,
+		)
+		report = match.no_show_reports.get()
+		report.deadline_at = timezone.now() - timedelta(minutes=1)
+		report.save(update_fields=["deadline_at"])
+
+		response = self.client.get(reverse("dashboard"))
+		self.assertEqual(response.status_code, 200)
+		match.refresh_from_db()
+		self.assertEqual(match.status, "forfeited")
+		self.assertEqual(match.winner, team_b)
+
 
 class TournamentLifecycleTests(TestCase):
 	"""Tests for end-to-end tournament lifecycle (organizer + team UI flows)."""

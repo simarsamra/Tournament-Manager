@@ -87,6 +87,34 @@
         </div>
         {% endif %}
 
+        {% if pending_no_show_report and is_participant %}
+        <div class="card">
+            <div class="card-header">No-Show Notice</div>
+            <div class="card-body">
+                {% if pending_no_show_report.absent_team == team %}
+                <p class="mb-1">Your opponent reported that your team did not show up. Request a reschedule within 24 hours to avoid an automatic forfeit.</p>
+                <p class="text-muted">Deadline: {{ pending_no_show_report.deadline_at|date:"M d, Y H:i" }}</p>
+                {% else %}
+                <p class="mb-1">You reported {{ pending_no_show_report.absent_team.name }} as a no-show. The match will be forfeited automatically if no reschedule is requested before {{ pending_no_show_report.deadline_at|date:"M d, Y H:i" }}.</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+        {% if can_report_no_show %}
+        <div class="card">
+            <div class="card-header">Report Opponent No-Show</div>
+            <div class="card-body">
+                <p class="mb-1">If the other team did not arrive, report it here. They will have 24 hours to request a reschedule before the result becomes a forfeit automatically.</p>
+                <form method="post" action="{% url 'report_no_show' pk=match.pk %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="no_show_team" value="{% if match.team1 == team %}{{ match.team2.pk }}{% else %}{{ match.team1.pk }}{% endif %}">
+                    <button type="submit" class="btn btn-warning" onclick="return confirm('Report the opponent as a no-show?')">Report Opponent No-Show</button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
         {% if can_mark_no_show %}
         <div class="card">
             <div class="card-header">No-Show</div>

@@ -17,7 +17,7 @@ from django.views.decorators.http import require_POST
 
 from .models import (
     Tournament, Court, TimeSlot, Team, Match,
-    RescheduleRequest, OpenSlot, AuditLog, BackupRecord, Player, CourtAvailability,
+    RescheduleRequest, NoShowReport, OpenSlot, AuditLog, BackupRecord, Player, CourtAvailability,
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
@@ -118,6 +118,65 @@ def _is_partial_refresh(request):
 def _render_refreshable_page(request, full_template, partial_template, context):
     template_name = partial_template if _is_partial_refresh(request) else full_template
     return render(request, template_name, context)
+
+
+def _finalize_no_show_match(match, loser, winner, reason_text, report=None, report_status="resolved"):
+    if not loser or not winner:
+        return False
+
+    match.status = "forfeited"
+    match.winner = winner
+    match.notes = (match.notes + "\n" if match.notes else "") + reason_text
+    match.save()
+    _create_open_slot_for_completed_match(match, f"Completed early by no-show: {match}")
+
+    tournament = match.tournament
+    if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
+        advance_winner(match)
+    if tournament.format == "consolation":
+        generate_consolation_if_ready(tournament)
+    if tournament.format == "hybrid" and match.group:
+        check_group_stage_complete(tournament)
+
+    if report and report.status == "pending":
+        report.status = report_status
+        report.resolved_at = timezone.now()
+        report.save(update_fields=["status", "resolved_at"])
+
+    return True
+
+
+def _expire_no_show_reports(tournament=None):
+    pending_reports = NoShowReport.objects.filter(status="pending").select_related(
+        "match", "absent_team", "present_team"
+    )
+    if tournament is not None:
+        pending_reports = pending_reports.filter(match__tournament=tournament)
+
+    now = timezone.now()
+    for report in pending_reports:
+        match = report.match
+        if match.status not in ("upcoming", "in_progress", "pending_confirmation"):
+            report.status = "resolved"
+            report.resolved_at = now
+            report.save(update_fields=["status", "resolved_at"])
+            continue
+
+        if match.reschedule_requests.filter(status="pending", requested_by=report.absent_team).exists():
+            report.status = "resolved"
+            report.resolved_at = now
+            report.save(update_fields=["status", "resolved_at"])
+            continue
+
+        if report.deadline_at <= now:
+            _finalize_no_show_match(
+                match,
+                loser=report.absent_team,
+                winner=report.present_team,
+                reason_text=f"Auto no-show forfeit: {report.absent_team.name}",
+                report=report,
+                report_status="auto_forfeited",
+            )
 
 
 def _validate_tournament_ready(tournament):
@@ -372,6 +431,8 @@ def register_view(request, pk=None):
 @login_required
 def dashboard_view(request):
     tournament = _get_tournament(request)
+    if tournament:
+        _expire_no_show_reports(tournament)
     team = _get_team(request.user)
     is_organizer = _is_organizer(request.user)
     context = {
@@ -395,6 +456,12 @@ def dashboard_view(request):
         context["pending_reschedules"] = RescheduleRequest.objects.filter(
             match__in=team_matches, status="pending",
         ).exclude(requested_by=team)
+        context["pending_no_show_reports"] = NoShowReport.objects.filter(
+            match__in=team_matches,
+            status="pending",
+        ).filter(Q(absent_team=team) | Q(present_team=team)).select_related(
+            "match", "absent_team", "present_team"
+        )
     if is_organizer:
         all_tournaments = _get_available_tournaments()
         context["all_tournaments"] = all_tournaments
@@ -759,6 +826,8 @@ def select_tournament(request):
 @login_required
 def fixtures_view(request):
     tournament = _get_tournament(request)
+    if tournament:
+        _expire_no_show_reports(tournament)
     if not tournament:
         return render(request, "core/fixtures.html", {
             "matches": [],
@@ -826,13 +895,19 @@ def match_detail(request, pk):
         Match.objects.select_related("team1", "team2", "court", "winner", "submitted_by", "confirmed_by"),
         pk=pk,
     )
+    _expire_no_show_reports(match.tournament)
+    match.refresh_from_db()
     _sync_open_slots_for_tournament(match.tournament)
     team = _get_team(request.user)
     is_participant = team and (match.team1 == team or match.team2 == team)
     can_submit = is_participant and match.status in ("upcoming", "in_progress")
     can_confirm = (is_participant and match.status == "pending_confirmation" and match.submitted_by != team)
     can_dispute = can_confirm
+    pending_no_show_report = match.no_show_reports.filter(status="pending").select_related(
+        "absent_team", "present_team"
+    ).first()
     can_mark_no_show = _is_organizer(request.user) and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress")
+    can_report_no_show = is_participant and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress") and not pending_no_show_report
     reschedule_form = RescheduleForm(tournament=match.tournament)
     open_slot_choices = _build_open_slot_choices(match, reschedule_form.fields["open_slot"].queryset)
     context = {
@@ -844,6 +919,8 @@ def match_detail(request, pk):
         "can_confirm": can_confirm,
         "can_dispute": can_dispute,
         "can_mark_no_show": can_mark_no_show,
+        "can_report_no_show": can_report_no_show,
+        "pending_no_show_report": pending_no_show_report,
         "score_form": ScoreSubmitForm(),
         "reschedule_form": reschedule_form,
         "open_slot_choices": open_slot_choices,
@@ -1007,6 +1084,7 @@ def resolve_dispute(request, pk):
 @require_POST
 def request_reschedule(request, pk):
     match = get_object_or_404(Match, pk=pk)
+    _expire_no_show_reports(match.tournament)
     team = _get_team(request.user)
     if not team or (match.team1 != team and match.team2 != team):
         messages.error(request, "Not a participant.")
@@ -1054,10 +1132,17 @@ def request_reschedule(request, pk):
             match=match, requested_by=team, new_time=new_dt,
             new_court=new_court, reason=form.cleaned_data.get("reason", ""),
         )
+        resolved = match.no_show_reports.filter(status="pending", absent_team=team)
+        had_pending_no_show = resolved.exists()
+        if had_pending_no_show:
+            resolved.update(status="resolved", resolved_at=timezone.now())
         log_action(request, "reschedule_requested",
                    f"Reschedule requested for {match} to {new_dt}",
                    tournament=match.tournament)
-        messages.success(request, "Reschedule request sent.")
+        if had_pending_no_show:
+            messages.success(request, "Reschedule request sent. The pending no-show notice has been cleared.")
+        else:
+            messages.success(request, "Reschedule request sent.")
     else:
         for errs in form.errors.values():
             for err in errs:
@@ -1119,6 +1204,8 @@ def respond_reschedule(request, pk):
 @login_required
 def standings_view(request):
     tournament = _get_tournament(request)
+    if tournament:
+        _expire_no_show_reports(tournament)
     context = {"tournament": tournament}
     if tournament:
         if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
@@ -1216,6 +1303,48 @@ def withdraw_team(request, pk):
 
 @login_required
 @require_POST
+def report_no_show(request, pk):
+    match = get_object_or_404(
+        Match.objects.select_related("team1", "team2", "tournament"),
+        pk=pk,
+    )
+    team = _get_team(request.user)
+    if not team or (match.team1 != team and match.team2 != team):
+        messages.error(request, "Only participating teams can report a no-show.")
+        return redirect("match_detail", pk=pk)
+    if match.status not in ("upcoming", "in_progress"):
+        messages.error(request, "No-shows can only be reported for active or upcoming matches.")
+        return redirect("match_detail", pk=pk)
+    if match.no_show_reports.filter(status="pending").exists():
+        messages.warning(request, "A no-show notice is already pending for this match.")
+        return redirect("match_detail", pk=pk)
+
+    no_show_team_id = request.POST.get("no_show_team")
+    opponent = match.get_opponent(team)
+    if not opponent or str(opponent.pk) != str(no_show_team_id):
+        messages.error(request, "You can only report your opponent as a no-show.")
+        return redirect("match_detail", pk=pk)
+
+    NoShowReport.objects.create(
+        match=match,
+        reported_by=team,
+        absent_team=opponent,
+        present_team=team,
+        note=request.POST.get("note", "").strip(),
+        deadline_at=timezone.now() + timedelta(days=1),
+    )
+    log_action(
+        request,
+        "match_no_show_reported",
+        f"No-show reported for {match}. Absent: {opponent.name}, Reporter: {team.name}",
+        tournament=match.tournament,
+    )
+    messages.warning(request, f"No-show reported. {opponent.name} has 24 hours to request a reschedule.")
+    return redirect("match_detail", pk=pk)
+
+
+@login_required
+@require_POST
 def mark_no_show(request, pk):
     if not _is_organizer(request.user):
         messages.error(request, "Only organizers can mark no-shows.")
@@ -1241,19 +1370,17 @@ def mark_no_show(request, pk):
         messages.error(request, "Cannot mark no-show: opponent not assigned.")
         return redirect("match_detail", pk=pk)
 
-    match.status = "forfeited"
-    match.winner = winner
-    match.notes = (match.notes + "\n" if match.notes else "") + f"No-show: {loser.name}"
-    match.save(update_fields=["status", "winner", "notes"])
-    _create_open_slot_for_completed_match(match, f"Completed early by no-show: {match}")
+    pending_report = match.no_show_reports.filter(status="pending").first()
+    _finalize_no_show_match(
+        match,
+        loser=loser,
+        winner=winner,
+        reason_text=f"No-show: {loser.name}",
+        report=pending_report,
+        report_status="resolved",
+    )
 
     tournament = match.tournament
-    if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
-        advance_winner(match)
-    if tournament.format == "consolation":
-        generate_consolation_if_ready(tournament)
-    if tournament.format == "hybrid" and match.group:
-        check_group_stage_complete(tournament)
 
     log_action(
         request,
@@ -1298,6 +1425,8 @@ def team_preferences(request, pk):
 @login_required
 def open_slots_view(request):
     tournament = _get_tournament(request)
+    if tournament:
+        _expire_no_show_reports(tournament)
     context = {
         "tournament": tournament,
         "slots": [],

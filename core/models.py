@@ -287,6 +287,39 @@ class RescheduleRequest(models.Model):
         return f"Reschedule for {self.match} by {self.requested_by}"
 
 
+class NoShowReport(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Pending Response"),
+        ("resolved", "Resolved"),
+        ("auto_forfeited", "Auto Forfeited"),
+        ("cancelled", "Cancelled"),
+    ]
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="no_show_reports"
+    )
+    reported_by = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="no_show_reports_made"
+    )
+    absent_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="no_show_reports_against"
+    )
+    present_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="no_show_reports_supported"
+    )
+    note = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    deadline_at = models.DateTimeField()
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"No-show report for {self.match} against {self.absent_team.name}"
+
+
 class OpenSlot(models.Model):
     tournament = models.ForeignKey(
         Tournament, on_delete=models.CASCADE, related_name="open_slots"

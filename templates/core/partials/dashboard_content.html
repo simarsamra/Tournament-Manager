@@ -148,7 +148,23 @@
             {% endfor %}
             {% endif %}
 
-            {% if not pending_matches and not pending_reschedules %}
+            {% if pending_no_show_reports %}
+            <h4 class="mb-1 mt-1">No-show notice</h4>
+            {% for report in pending_no_show_reports %}
+            <div class="d-flex justify-between align-center mb-1" style="padding:0.5rem;background:#fee2e2;border-radius:6px;gap:0.5rem;">
+                <span>
+                    {% if report.absent_team == team %}
+                        Your team was reported absent for Match #{{ report.match.match_number }}. Request a reschedule before {{ report.deadline_at|date:"M d, H:i" }}.
+                    {% else %}
+                        You reported a no-show for Match #{{ report.match.match_number }}. Auto-forfeit happens after {{ report.deadline_at|date:"M d, H:i" }} if there is no reschedule.
+                    {% endif %}
+                </span>
+                <a href="{% url 'match_detail' pk=report.match.pk %}" class="btn btn-danger btn-sm">Open</a>
+            </div>
+            {% endfor %}
+            {% endif %}
+
+            {% if not pending_matches and not pending_reschedules and not pending_no_show_reports %}
             <p class="text-muted">No pending actions.</p>
             {% endif %}
         </div>
