@@ -896,7 +896,7 @@ def confirm_score(request, pk):
     log_action(request, "score_confirmed",
                f"Score confirmed for {match}: {match.score_team1}-{match.score_team2}",
                tournament=tournament)
-    messages.success(request, "Score confirmed!")
+    messages.success(request, "Score confirmed. Match marked done.")
     return redirect("match_detail", pk=pk)
 
 
@@ -968,7 +968,7 @@ def resolve_dispute(request, pk):
         log_action(request, "dispute_resolved",
                    f"Dispute resolved for {match}: {match.score_team1}-{match.score_team2}",
                    tournament=tournament)
-        messages.success(request, "Dispute resolved.")
+        messages.success(request, "Dispute resolved. Match marked done.")
     return redirect("match_detail", pk=pk)
 
 

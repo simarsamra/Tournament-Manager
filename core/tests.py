@@ -639,6 +639,28 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertContains(response, alt_court.name)
 		self.assertContains(response, timezone.localtime(slot.start_time).strftime("%b %d, %Y"))
 
+	def test_match_detail_shows_done_label_for_confirmed_status(self):
+		tournament = self._create_tournament(name="Done Label")
+		court = Court.objects.create(tournament=tournament, name="Center Court", is_available=True)
+		team1 = self._create_team(tournament, "Done A", username="done_a_user")
+		team2 = self._create_team(tournament, "Done B", username="done_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=43,
+			team1=team1,
+			team2=team2,
+			court=court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="confirmed",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.get(reverse("match_detail", kwargs={"pk": match.pk}))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Done")
+
 	def test_match_detail_reschedule_shows_same_day_context_for_both_teams(self):
 		tournament = self._create_tournament(name="Same Day Slot Context")
 		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)

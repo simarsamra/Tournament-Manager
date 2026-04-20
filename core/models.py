@@ -194,7 +194,7 @@ class Match(models.Model):
         ("upcoming", "Upcoming"),
         ("in_progress", "In Progress"),
         ("pending_confirmation", "Pending Confirmation"),
-        ("confirmed", "Confirmed"),
+        ("confirmed", "Done"),
         ("disputed", "Disputed"),
         ("cancelled", "Cancelled"),
         ("forfeited", "Forfeited"),
