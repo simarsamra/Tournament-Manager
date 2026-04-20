@@ -290,9 +290,74 @@ tr:hover { background: #f8fafc; }
     padding-top: 0.1rem;
 }
 
+.slot-option-radio {
+    margin-top: 0.2rem;
+}
+
+.slot-option-body {
+    display: grid;
+    gap: 0.35rem;
+    flex: 1;
+}
+
 .slot-option-content {
     font-size: 0.9rem;
     color: var(--text);
+}
+
+.slot-option-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.slot-team-context {
+    display: none;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--border);
+}
+
+.slot-option-radio:checked + .slot-option-body {
+    color: var(--primary-dark);
+}
+
+.slot-option-radio:checked + .slot-option-body .slot-option-content {
+    font-weight: 600;
+    color: var(--primary-dark);
+}
+
+.slot-option-radio:checked + .slot-option-body .slot-team-context {
+    display: grid;
+}
+
+.slot-context-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+
+.slot-team-schedule {
+    display: block;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: white;
+}
+
+.slot-match-list {
+    margin: 0.35rem 0 0 1rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.slot-context-empty {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
 }
 
 .empty-state {

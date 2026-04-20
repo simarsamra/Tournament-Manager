@@ -639,6 +639,64 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertContains(response, alt_court.name)
 		self.assertContains(response, timezone.localtime(slot.start_time).strftime("%b %d, %Y"))
 
+	def test_match_detail_reschedule_shows_same_day_context_for_both_teams(self):
+		tournament = self._create_tournament(name="Same Day Slot Context")
+		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
+		court_x = Court.objects.create(tournament=tournament, name="Court X", is_available=True)
+		court_z = Court.objects.create(tournament=tournament, name="Court Z", is_available=True)
+		team1 = self._create_team(tournament, "Alpha", username="alpha_same_day_context")
+		team2 = self._create_team(tournament, "Beta", username="beta_same_day_context")
+		other1 = self._create_team(tournament, "Gamma", username="gamma_same_day_context")
+		other2 = self._create_team(tournament, "Delta", username="delta_same_day_context")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=40,
+			team1=team1,
+			team2=team2,
+			court=primary_court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		slot_start = timezone.now() + timedelta(days=3, hours=2)
+		Match.objects.create(
+			tournament=tournament,
+			match_number=41,
+			team1=team1,
+			team2=other1,
+			court=court_x,
+			scheduled_time=slot_start - timedelta(hours=2),
+			scheduled_end_time=slot_start - timedelta(hours=1, minutes=30),
+			status="upcoming",
+		)
+		Match.objects.create(
+			tournament=tournament,
+			match_number=42,
+			team1=other2,
+			team2=team2,
+			court=court_z,
+			scheduled_time=slot_start - timedelta(hours=1),
+			scheduled_end_time=slot_start - timedelta(minutes=30),
+			status="upcoming",
+		)
+		OpenSlot.objects.create(
+			tournament=tournament,
+			court=primary_court,
+			start_time=slot_start,
+			end_time=slot_start + timedelta(minutes=30),
+			reason="Same-day review",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.get(reverse("match_detail", kwargs={"pk": match.pk}))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Same-day team schedules")
+		self.assertContains(response, team1.name)
+		self.assertContains(response, team2.name)
+		self.assertContains(response, court_x.name)
+		self.assertContains(response, court_z.name)
+
 	def test_request_reschedule_accepts_open_slot_backed_by_completed_match(self):
 		tournament = self._create_tournament(name="Completed Match Slot")
 		current_court = Court.objects.create(tournament=tournament, name="Current", is_available=True)

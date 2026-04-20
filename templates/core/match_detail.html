@@ -127,12 +127,38 @@
                     {% csrf_token %}
                     <div class="form-group">
                         <label>Choose Open Slot</label>
-                        {% if reschedule_form.open_slot.field.queryset %}
+                        {% if open_slot_choices %}
                         <div class="slot-picker">
-                            {% for radio in reschedule_form.open_slot %}
-                            <label class="slot-option" for="{{ radio.id_for_label }}">
-                                <span class="slot-option-input">{{ radio.tag }}</span>
-                                <span class="slot-option-content">{{ radio.choice_label }}</span>
+                            {% for option in open_slot_choices %}
+                            <label class="slot-option" for="open-slot-{{ option.slot.pk }}">
+                                <input
+                                    class="slot-option-radio"
+                                    type="radio"
+                                    name="{{ reschedule_form.open_slot.html_name }}"
+                                    value="{{ option.slot.pk }}"
+                                    id="open-slot-{{ option.slot.pk }}"
+                                >
+                                <div class="slot-option-body">
+                                    <div class="slot-option-content">{{ option.slot.start_time|date:"D, M d, Y · H:i" }} - {{ option.slot.end_time|date:"H:i" }} · {{ option.slot.court.name }}</div>
+                                    <div class="slot-option-hint">Select this slot to review both teams' other matches on that day.</div>
+                                    <div class="slot-team-context">
+                                        <div class="slot-context-title">Same-day team schedules</div>
+                                        {% for team_schedule in option.team_schedules %}
+                                        <div class="slot-team-schedule">
+                                            <strong>{{ team_schedule.team_name }}</strong>
+                                            {% if team_schedule.matches %}
+                                            <ul class="slot-match-list">
+                                                {% for same_day_match in team_schedule.matches %}
+                                                <li>Match #{{ same_day_match.match_number }} · {{ same_day_match.time_label }} · {{ same_day_match.court_name }} vs {{ same_day_match.opponent_name }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                            {% else %}
+                                            <span class="slot-context-empty">No other scheduled matches that day.</span>
+                                            {% endif %}
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
                             </label>
                             {% endfor %}
                         </div>

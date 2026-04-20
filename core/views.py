@@ -195,6 +195,71 @@ def _sync_open_slots_for_tournament(tournament):
         _create_open_slot_for_completed_match(match, f"Completed early: {match}")
 
 
+def _build_open_slot_choices(match, slots):
+    slots = list(slots)
+    if not slots:
+        return []
+
+    teams = [team for team in (match.team1, match.team2) if team]
+    slot_dates = {timezone.localtime(slot.start_time).date() for slot in slots}
+    schedule_by_team_day = defaultdict(list)
+
+    if teams:
+        team_ids = [team.pk for team in teams]
+        related_matches = (
+            Match.objects.filter(
+                tournament=match.tournament,
+                scheduled_time__isnull=False,
+            )
+            .exclude(pk=match.pk)
+            .exclude(status__in=["cancelled", "bye"])
+            .filter(Q(team1_id__in=team_ids) | Q(team2_id__in=team_ids))
+            .select_related("team1", "team2", "court")
+            .order_by("scheduled_time", "match_number")
+        )
+
+        for related_match in related_matches:
+            local_start = timezone.localtime(related_match.scheduled_time)
+            match_day = local_start.date()
+            if match_day not in slot_dates:
+                continue
+
+            local_end = (
+                timezone.localtime(related_match.scheduled_end_time)
+                if related_match.scheduled_end_time else None
+            )
+
+            for team in teams:
+                if related_match.team1_id == team.pk or related_match.team2_id == team.pk:
+                    opponent = related_match.get_opponent(team)
+                    schedule_by_team_day[(team.pk, match_day)].append({
+                        "match_number": related_match.match_number,
+                        "time_label": (
+                            f"{local_start.strftime('%H:%M')} - {local_end.strftime('%H:%M')}"
+                            if local_end else local_start.strftime("%H:%M")
+                        ),
+                        "court_name": related_match.court.name if related_match.court else "TBD court",
+                        "opponent_name": opponent.name if opponent else "TBD",
+                    })
+
+    return [
+        {
+            "slot": slot,
+            "team_schedules": [
+                {
+                    "team_name": team.name,
+                    "matches": schedule_by_team_day.get(
+                        (team.pk, timezone.localtime(slot.start_time).date()),
+                        [],
+                    ),
+                }
+                for team in teams
+            ],
+        }
+        for slot in slots
+    ]
+
+
 # -- Auth Views --
 
 def login_view(request):
@@ -745,6 +810,8 @@ def match_detail(request, pk):
     can_confirm = (is_participant and match.status == "pending_confirmation" and match.submitted_by != team)
     can_dispute = can_confirm
     can_mark_no_show = _is_organizer(request.user) and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress")
+    reschedule_form = RescheduleForm(tournament=match.tournament)
+    open_slot_choices = _build_open_slot_choices(match, reschedule_form.fields["open_slot"].queryset)
     return render(request, "core/match_detail.html", {
         "match": match,
         "team": team,
@@ -755,7 +822,8 @@ def match_detail(request, pk):
         "can_dispute": can_dispute,
         "can_mark_no_show": can_mark_no_show,
         "score_form": ScoreSubmitForm(),
-        "reschedule_form": RescheduleForm(tournament=match.tournament),
+        "reschedule_form": reschedule_form,
+        "open_slot_choices": open_slot_choices,
         "reschedule_requests": match.reschedule_requests.order_by("-created_at"),
         "is_organizer": _is_organizer(request.user),
         **_tournament_context(request, match.tournament),
