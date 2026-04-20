@@ -906,8 +906,9 @@ def match_detail(request, pk):
     pending_no_show_report = match.no_show_reports.filter(status="pending").select_related(
         "absent_team", "present_team"
     ).first()
-    can_mark_no_show = _is_organizer(request.user) and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress")
-    can_report_no_show = is_participant and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress") and not pending_no_show_report
+    no_show_window_open = bool(match.scheduled_time and match.scheduled_time <= timezone.now())
+    can_mark_no_show = _is_organizer(request.user) and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress") and no_show_window_open
+    can_report_no_show = is_participant and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress") and no_show_window_open and not pending_no_show_report
     reschedule_form = RescheduleForm(tournament=match.tournament)
     open_slot_choices = _build_open_slot_choices(match, reschedule_form.fields["open_slot"].queryset)
     context = {
@@ -1315,6 +1316,9 @@ def report_no_show(request, pk):
     if match.status not in ("upcoming", "in_progress"):
         messages.error(request, "No-shows can only be reported for active or upcoming matches.")
         return redirect("match_detail", pk=pk)
+    if not match.scheduled_time or match.scheduled_time > timezone.now():
+        messages.error(request, "No-shows can only be reported after the scheduled match time has passed.")
+        return redirect("match_detail", pk=pk)
     if match.no_show_reports.filter(status="pending").exists():
         messages.warning(request, "A no-show notice is already pending for this match.")
         return redirect("match_detail", pk=pk)
@@ -1353,6 +1357,9 @@ def mark_no_show(request, pk):
     match = get_object_or_404(Match, pk=pk)
     if match.status not in ("upcoming", "in_progress", "pending_confirmation"):
         messages.error(request, "No-show can only be recorded for active/upcoming matches.")
+        return redirect("match_detail", pk=pk)
+    if not match.scheduled_time or match.scheduled_time > timezone.now():
+        messages.error(request, "No-show can only be recorded after the scheduled match time has passed.")
         return redirect("match_detail", pk=pk)
 
     no_show_team_id = request.POST.get("no_show_team")

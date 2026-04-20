@@ -1372,6 +1372,9 @@ class WithdrawalPolicyTests(TestCase):
 		team2 = self._create_team(tournament, "Team B", username="team_b4", seed=2)
 		generate_fixtures(tournament)
 		match = tournament.matches.filter(status="upcoming").first()
+		match.scheduled_time = timezone.now() - timedelta(minutes=20)
+		match.scheduled_end_time = timezone.now() + timedelta(minutes=10)
+		match.save(update_fields=["scheduled_time", "scheduled_end_time"])
 
 		self.client.force_login(self.organizer)
 		response = self.client.post(
@@ -1403,12 +1406,36 @@ class WithdrawalPolicyTests(TestCase):
 		match.refresh_from_db()
 		self.assertEqual(match.status, "upcoming")
 
+	def test_team_cannot_report_no_show_before_match_time(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		team_a = self._create_team(tournament, "Team A", username="team_a_early_no_show", seed=1)
+		team_b = self._create_team(tournament, "Team B", username="team_b_early_no_show", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+		match.scheduled_time = timezone.now() + timedelta(hours=2)
+		match.scheduled_end_time = match.scheduled_time + timedelta(minutes=30)
+		match.save(update_fields=["scheduled_time", "scheduled_end_time"])
+
+		self.client.force_login(team_b.user)
+		response = self.client.post(
+			reverse("report_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team_a.pk)},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(match.no_show_reports.count(), 0)
+		self.assertContains(response, "only be reported after the scheduled match time")
+
 	def test_team_can_report_opponent_no_show_and_see_dashboard_notice(self):
 		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
 		team_a = self._create_team(tournament, "Team A", username="team_a_no_show", seed=1)
 		team_b = self._create_team(tournament, "Team B", username="team_b_no_show", seed=2)
 		generate_fixtures(tournament)
 		match = tournament.matches.filter(status="upcoming").first()
+		match.scheduled_time = timezone.now() - timedelta(minutes=20)
+		match.scheduled_end_time = timezone.now() + timedelta(minutes=10)
+		match.save(update_fields=["scheduled_time", "scheduled_end_time"])
 
 		self.client.force_login(team_b.user)
 		response = self.client.post(
@@ -1435,8 +1462,8 @@ class WithdrawalPolicyTests(TestCase):
 		generate_fixtures(tournament)
 		match = tournament.matches.filter(status="upcoming").first()
 		match.court = court
-		match.scheduled_time = timezone.now() + timedelta(days=1)
-		match.scheduled_end_time = match.scheduled_time + timedelta(minutes=30)
+		match.scheduled_time = timezone.now() - timedelta(minutes=20)
+		match.scheduled_end_time = timezone.now() + timedelta(minutes=10)
 		match.save(update_fields=["court", "scheduled_time", "scheduled_end_time"])
 
 		self.client.force_login(team_b.user)
@@ -1467,6 +1494,9 @@ class WithdrawalPolicyTests(TestCase):
 		team_b = self._create_team(tournament, "Team B", username="team_b_auto", seed=2)
 		generate_fixtures(tournament)
 		match = tournament.matches.filter(status="upcoming").first()
+		match.scheduled_time = timezone.now() - timedelta(minutes=20)
+		match.scheduled_end_time = timezone.now() + timedelta(minutes=10)
+		match.save(update_fields=["scheduled_time", "scheduled_end_time"])
 
 		self.client.force_login(team_b.user)
 		self.client.post(
