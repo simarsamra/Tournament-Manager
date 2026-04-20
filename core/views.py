@@ -108,6 +108,18 @@ def _safe_page_param(request, default=1):
     return page if page > 0 else default
 
 
+def _is_partial_refresh(request):
+    return (
+        request.GET.get("partial") == "1"
+        and request.headers.get("x-requested-with", "").lower() == "xmlhttprequest"
+    )
+
+
+def _render_refreshable_page(request, full_template, partial_template, context):
+    template_name = partial_template if _is_partial_refresh(request) else full_template
+    return render(request, template_name, context)
+
+
 def _validate_tournament_ready(tournament):
     """Return a list of human-friendly reasons a tournament cannot start yet."""
     errors = []
@@ -398,7 +410,12 @@ def dashboard_view(request):
         context["pending_matches_count"] = tournament.matches.filter(status="pending_confirmation").count()
         context["disputed_matches"] = tournament.matches.filter(status="disputed").count()
     context.update(_tournament_context(request, tournament))
-    return render(request, "core/dashboard.html", context)
+    return _render_refreshable_page(
+        request,
+        "core/dashboard.html",
+        "core/partials/dashboard_content.html",
+        context,
+    )
 
 
 # -- Tournament Setup --
@@ -776,7 +793,7 @@ def fixtures_view(request):
     teams = tournament.teams.all()
     courts = tournament.courts.all()
     groups = sorted(set(tournament.teams.exclude(group="").values_list("group", flat=True)))
-    return render(request, "core/fixtures.html", {
+    context = {
         "tournament": tournament,
         "matches": matches,
         "teams": teams,
@@ -792,7 +809,13 @@ def fixtures_view(request):
         "page_range": range(1, total_pages + 1),
         "team": _get_team(request.user),
         **_tournament_context(request, tournament),
-    })
+    }
+    return _render_refreshable_page(
+        request,
+        "core/fixtures.html",
+        "core/partials/fixtures_content.html",
+        context,
+    )
 
 
 # -- Match Detail & Score Submission --
@@ -812,7 +835,7 @@ def match_detail(request, pk):
     can_mark_no_show = _is_organizer(request.user) and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress")
     reschedule_form = RescheduleForm(tournament=match.tournament)
     open_slot_choices = _build_open_slot_choices(match, reschedule_form.fields["open_slot"].queryset)
-    return render(request, "core/match_detail.html", {
+    context = {
         "match": match,
         "team": team,
         "tournament": match.tournament,
@@ -827,7 +850,13 @@ def match_detail(request, pk):
         "reschedule_requests": match.reschedule_requests.order_by("-created_at"),
         "is_organizer": _is_organizer(request.user),
         **_tournament_context(request, match.tournament),
-    })
+    }
+    return _render_refreshable_page(
+        request,
+        "core/match_detail.html",
+        "core/partials/match_detail_content.html",
+        context,
+    )
 
 
 @login_required
@@ -1090,27 +1119,31 @@ def respond_reschedule(request, pk):
 @login_required
 def standings_view(request):
     tournament = _get_tournament(request)
-    if not tournament:
-        return render(request, "core/standings.html", _tournament_context(request, tournament))
     context = {"tournament": tournament}
-    if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
-        if tournament.format == "hybrid":
-            groups = sorted(set(
-                tournament.teams.exclude(group="").values_list("group", flat=True)
-            ))
-            group_standings = {}
-            for g in groups:
-                group_standings[g] = calculate_standings(tournament, group=g)
-            context["group_standings"] = group_standings
-            ko_matches = tournament.matches.filter(group="", bracket_type="winners")
-            if ko_matches.exists():
-                context["bracket"] = get_bracket_data(tournament)
-        else:
-            context["standings"] = calculate_standings(tournament)
-    if tournament.format in ("knockout", "double_elimination", "consolation"):
-        context["bracket"] = get_bracket_data(tournament)
+    if tournament:
+        if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
+            if tournament.format == "hybrid":
+                groups = sorted(set(
+                    tournament.teams.exclude(group="").values_list("group", flat=True)
+                ))
+                group_standings = {}
+                for g in groups:
+                    group_standings[g] = calculate_standings(tournament, group=g)
+                context["group_standings"] = group_standings
+                ko_matches = tournament.matches.filter(group="", bracket_type="winners")
+                if ko_matches.exists():
+                    context["bracket"] = get_bracket_data(tournament)
+            else:
+                context["standings"] = calculate_standings(tournament)
+        if tournament.format in ("knockout", "double_elimination", "consolation"):
+            context["bracket"] = get_bracket_data(tournament)
     context.update(_tournament_context(request, tournament))
-    return render(request, "core/standings.html", context)
+    return _render_refreshable_page(
+        request,
+        "core/standings.html",
+        "core/partials/standings_content.html",
+        context,
+    )
 
 
 # -- Teams --
@@ -1265,17 +1298,20 @@ def team_preferences(request, pk):
 @login_required
 def open_slots_view(request):
     tournament = _get_tournament(request)
-    if not tournament:
-        return render(request, "core/open_slots.html", {
-            "slots": [],
-            **_tournament_context(request, tournament),
-        })
-    _sync_open_slots_for_tournament(tournament)
-    return render(request, "core/open_slots.html", {
+    context = {
         "tournament": tournament,
-        "slots": tournament.open_slots.select_related("court").filter(end_time__gt=timezone.now()),
+        "slots": [],
         **_tournament_context(request, tournament),
-    })
+    }
+    if tournament:
+        _sync_open_slots_for_tournament(tournament)
+        context["slots"] = tournament.open_slots.select_related("court").filter(end_time__gt=timezone.now())
+    return _render_refreshable_page(
+        request,
+        "core/open_slots.html",
+        "core/partials/open_slots_content.html",
+        context,
+    )
 
 
 # -- Analytics --

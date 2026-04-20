@@ -661,6 +661,49 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertContains(response, "Done")
 
+	def test_dashboard_partial_refresh_returns_section_only(self):
+		tournament = self._create_tournament(name="Live Dashboard")
+		self._create_team(tournament, "Alpha Live", username="alpha_live_dashboard")
+		self.client.force_login(self.organizer)
+
+		response = self.client.get(
+			reverse("dashboard"),
+			{"partial": "1"},
+			HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Tournament Overview")
+		self.assertNotContains(response, "<!DOCTYPE html>")
+
+	def test_match_detail_partial_refresh_returns_section_only(self):
+		tournament = self._create_tournament(name="Live Match Detail")
+		court = Court.objects.create(tournament=tournament, name="Court Live", is_available=True)
+		team1 = self._create_team(tournament, "Live A", username="live_a_user")
+		team2 = self._create_team(tournament, "Live B", username="live_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=44,
+			team1=team1,
+			team2=team2,
+			court=court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.get(
+			reverse("match_detail", kwargs={"pk": match.pk}),
+			{"partial": "1"},
+			HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Match Info")
+		self.assertContains(response, "Request Reschedule")
+		self.assertNotContains(response, "<!DOCTYPE html>")
+
 	def test_match_detail_reschedule_shows_same_day_context_for_both_teams(self):
 		tournament = self._create_tournament(name="Same Day Slot Context")
 		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
