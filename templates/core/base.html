@@ -5,7 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Tournament Manager{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <script>!function(){var t=localStorage.getItem('tm-theme');if(t)document.documentElement.setAttribute('data-theme',t);}();</script>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}?v={% now 'YmdHis' %}">
     {% block extra_css %}{% endblock %}
 </head>
 <body>
@@ -69,6 +70,15 @@
                     {% csrf_token %}
                     <button type="submit" class="btn btn-outline btn-sm">Logout</button>
                 </form>
+                <div class="theme-picker">
+                    <label for="themeSelect" style="font-size:1.1rem;cursor:default;" title="Theme">🎨</label>
+                    <select id="themeSelect" class="form-select" style="width:auto;padding:0.3rem 0.55rem;font-size:0.85rem;">
+                        <option value="default">Default</option>
+                        <option value="dark">Dark</option>
+                        <option value="emerald">Emerald</option>
+                        <option value="purple">Purple</option>
+                    </select>
+                </div>
             </div>
         </header>
         <div class="content">
@@ -91,7 +101,7 @@
     {% block public_content %}{% endblock %}
 </div>
 {% endif %}
-<script src="{% static 'js/app.js' %}"></script>
+<script src="{% static 'js/app.js' %}?v={% now 'YmdHis' %}"></script>
 {% block extra_js %}{% endblock %}
 </body>
 </html>

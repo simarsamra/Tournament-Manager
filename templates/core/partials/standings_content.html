@@ -41,7 +41,7 @@
         </thead>
         <tbody>
             {% for s in st %}
-            <tr{% if s.rank <= tournament.teams_per_group_advance %} style="background:#d1fae5"{% endif %}>
+            <tr{% if s.rank <= tournament.teams_per_group_advance %} class="row-advance"{% endif %}>
                 <td><strong>{{ s.rank }}</strong></td>
                 <td><a href="{% url 'team_detail' pk=s.team.pk %}">{{ s.team.name }}</a></td>
                 <td>{{ s.played }}</td>

@@ -44,7 +44,7 @@
                 </thead>
                 <tbody>
                     {% for t in all_tournaments %}
-                    <tr{% if tournament and t.pk == tournament.pk %} style="background:#eff6ff;"{% endif %}>
+                    <tr{% if tournament and t.pk == tournament.pk %} class="row-selected"{% endif %}>
                         <td>
                             <strong>{{ t.name }}</strong>
                             {% if tournament and t.pk == tournament.pk %}
@@ -195,7 +195,7 @@
         </div>
         {% if next_opponent %}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;margin-bottom:0.75rem;">
-            <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:0.6rem 0.75rem;">
+            <div class="info-panel">
                 <div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);letter-spacing:.04em;margin-bottom:0.3rem;">Their Form</div>
                 {% if next_opponent_standing %}
                 <div style="font-size:0.85rem;">Rank <strong>#{{ next_opponent_standing.rank }}</strong> &middot; <strong>{{ next_opponent_standing.points }} pts</strong></div>
@@ -204,7 +204,7 @@
                 <div style="font-size:0.85rem;color:var(--text-muted);">No standing data yet</div>
                 {% endif %}
             </div>
-            <div style="background:#f8fafc;border:1px solid var(--border);border-radius:6px;padding:0.6rem 0.75rem;">
+            <div class="info-panel">
                 <div style="font-size:0.7rem;text-transform:uppercase;color:var(--text-muted);letter-spacing:.04em;margin-bottom:0.3rem;">Head to Head</div>
                 {% if h2h.wins or h2h.losses or h2h.draws %}
                 <div style="font-size:0.85rem;"><span style="color:var(--success);font-weight:600;">{{ h2h.wins }}W</span> &middot; <span style="color:var(--danger);font-weight:600;">{{ h2h.losses }}L</span>{% if h2h.draws %} &middot; <span>{{ h2h.draws }}D</span>{% endif %}</div>
@@ -317,7 +317,7 @@
         {% endif %}
 
         {% if team_standing and points_gap_to_first is not None %}
-        <div style="margin-top:0.75rem;padding:0.6rem 0.75rem;{% if can_reach_first %}background:#f0fdf4;border:1px solid #bbf7d0;{% else %}background:#fff7ed;border:1px solid #fed7aa;{% endif %}border-radius:6px;font-size:0.85rem;">
+        <div style="margin-top:0.75rem;padding:0.6rem 0.75rem;font-size:0.85rem;" class="{% if can_reach_first %}info-success{% else %}info-warning{% endif %}">
             {% if team_standing.rank == 1 %}
             &#127947; You&rsquo;re in <strong>1st place</strong> with {{ team_standing.points }} pts.
             {% elif can_reach_first %}
@@ -341,7 +341,7 @@
         <table>
             <tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>L</th><th>GD</th><th>Pts</th></tr>
             {% for row, is_me in standings_nearby %}
-            <tr {% if is_me %}style="background:#eff6ff;font-weight:600;"{% endif %}>
+            <tr {% if is_me %}class="row-me"{% endif %}>
                 <td>{{ row.rank }}</td>
                 <td>{{ row.team.name }}{% if is_me %} <span style="font-size:0.75rem;color:var(--primary);">(you)</span>{% endif %}</td>
                 <td>{{ row.played }}</td>

@@ -1,5 +1,20 @@
+// ── Theme system ──────────────────────────────────────────────────────────
+// (theme is applied early via inline <script> in <head> to avoid flash)
+
 // Sidebar toggle for mobile
 document.addEventListener('DOMContentLoaded', function() {
+
+    // Theme select
+    var themeSelect = document.getElementById('themeSelect');
+    if (themeSelect) {
+        themeSelect.value = localStorage.getItem('tm-theme') || 'default';
+        themeSelect.addEventListener('change', function() {
+            var theme = this.value;
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('tm-theme', theme);
+        });
+    }
+
     const toggle = document.querySelector('.menu-toggle');
     const sidebar = document.querySelector('.sidebar');
     if (toggle && sidebar) {
