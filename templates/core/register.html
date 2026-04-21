@@ -1,90 +1,40 @@
 {% extends "core/base.html" %}
-{% block title %}Register - Tournament Manager{% endblock %}
+{% block title %}Create Account - Tournament Manager{% endblock %}
 {% block public_content %}
 <div class="card">
-    <div class="card-header"><h2>Register Team</h2></div>
+    <div class="card-header"><h2>Create Account</h2></div>
     <div class="card-body">
-        {% if tournament %}
-        <p class="text-muted mb-2">Registering for: <strong>{{ tournament.name }}</strong> ({{ tournament.get_sport_type_display }})</p>
-        {% if registration_closed %}
-        <div class="alert alert-warning">Registration is currently closed for this tournament.</div>
-        {% else %}
-        <p class="text-muted mb-2">One player should register as the <strong>team captain</strong>. The captain account manages the team dashboard.</p>
-        {% if tournament.players_per_team > 1 %}
-        <p class="text-muted mb-2">Each team requires <strong>{{ tournament.players_per_team }}</strong> players.</p>
-        {% endif %}
-        <form method="post" id="registration-form">
+        <p class="text-muted mb-2">Create your account, then join or create a team once you log in.</p>
+        <form method="post">
             {% csrf_token %}
             <div class="form-group">
-                <label for="{{ form.team_name.id_for_label }}">{{ form.team_name.label }}</label>
-                {{ form.team_name }}
-                {% if form.team_name.errors %}<small class="text-danger">{{ form.team_name.errors.0 }}</small>{% endif %}
+                <label for="{{ form.full_name.id_for_label }}">Full Name</label>
+                {{ form.full_name }}
+                {% if form.full_name.errors %}<small class="text-danger">{{ form.full_name.errors.0 }}</small>{% endif %}
             </div>
             <div class="form-group">
-                <label for="{{ form.username.id_for_label }}">Captain Username</label>
+                <label for="{{ form.username.id_for_label }}">Username</label>
                 {{ form.username }}
+                <small class="text-muted">{{ form.username.help_text }}</small>
                 {% if form.username.errors %}<small class="text-danger">{{ form.username.errors.0 }}</small>{% endif %}
             </div>
             <div class="form-group">
-                <label for="{{ form.password.id_for_label }}">{{ form.password.label }}</label>
+                <label for="{{ form.password.id_for_label }}">Password</label>
                 {{ form.password }}
                 {% if form.password.errors %}<small class="text-danger">{{ form.password.errors.0 }}</small>{% endif %}
             </div>
             <div class="form-group">
-                <label for="{{ form.password_confirm.id_for_label }}">{{ form.password_confirm.label }}</label>
+                <label for="{{ form.password_confirm.id_for_label }}">Confirm Password</label>
                 {{ form.password_confirm }}
                 {% if form.password_confirm.errors %}<small class="text-danger">{{ form.password_confirm.errors.0 }}</small>{% endif %}
-            </div>
-            <div class="form-group">
-                <label for="{{ form.player_names.id_for_label }}">Player Names (Real Names)</label>
-                {{ form.player_names }}
-                <small class="text-muted">{{ form.player_names.help_text }}</small>
-                {% if form.player_names.errors %}<small class="text-danger">{{ form.player_names.errors.0 }}</small>{% endif %}
-            </div>
-            <div class="form-group">
-                <label>Preferred Courts</label>
-                {% if available_courts %}
-                    {{ form.preferred_courts }}
-                {% else %}
-                    <div class="alert alert-warning" style="margin-bottom:0.5rem;">No preferred courts are available yet. The organizer needs to mark courts as available first.</div>
-                {% endif %}
-                <small class="text-muted">{{ form.preferred_courts.help_text }}</small>
-                {% if form.preferred_courts.errors %}<small class="text-danger">{{ form.preferred_courts.errors.0 }}</small>{% endif %}
-            </div>
-            <div class="card" style="margin:1rem 0;background:#f8f9fa;">
-                <div class="card-header">Review before registering</div>
-                <div class="card-body" style="font-size:0.9rem;">
-                    <div><strong>Team:</strong> <span data-preview="team_name">-</span></div>
-                    <div><strong>Captain username:</strong> <span data-preview="username">-</span></div>
-                    <div><strong>Players entered:</strong> <span data-preview="player_count">0</span></div>
-                    <div><strong>Preferred courts:</strong> <span data-preview="preferred_courts">None selected</span></div>
-                </div>
-            </div>
-            <div class="form-group">
-                <label class="d-flex align-center" style="gap:0.5rem;">
-                    {{ form.confirm_registration }}
-                    <span>I confirm the above information is correct.</span>
-                </label>
-                {% if form.confirm_registration.errors %}<small class="text-danger">{{ form.confirm_registration.errors.0 }}</small>{% endif %}
             </div>
             {% if form.non_field_errors %}
             <div class="alert alert-error">{{ form.non_field_errors.0 }}</div>
             {% endif %}
-            <button type="submit" class="btn btn-primary btn-lg" style="width:100%" onclick="return confirm('Please confirm that your team details are correct before submitting.')">Register Team</button>
+            <button type="submit" class="btn btn-primary btn-lg" style="width:100%">Create Account</button>
         </form>
-        {% endif %}
-        {% elif open_tournaments %}
-        <p class="text-muted">Choose a tournament to register for:</p>
-        {% for open_tournament in open_tournaments %}
-        <div class="d-flex justify-between align-center mb-1" style="padding:0.75rem;background:#f8f9fa;border-radius:6px;">
-            <span><strong>{{ open_tournament.name }}</strong> — {{ open_tournament.get_format_display }}</span>
-            <a href="{% url 'tournament_register' pk=open_tournament.pk %}" class="btn btn-primary btn-sm">Open Registration</a>
-        </div>
-        {% endfor %}
-        {% else %}
-        <p class="text-muted">No tournament available for registration.</p>
-        {% endif %}
-        <p class="text-muted mt-2 text-center"><a href="{% url 'login' %}">Back to login</a></p>
+        <p class="text-muted mt-2 text-center"><a href="{% url 'login' %}">Already have an account? Log in</a></p>
     </div>
 </div>
 {% endblock %}
+

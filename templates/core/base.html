@@ -30,6 +30,9 @@
             {% if team %}
             <div class="sidebar-section">My Team</div>
             <a href="{% url 'team_detail' pk=team.pk %}" class="{% if request.resolver_match.url_name == 'team_detail' %}active{% endif %}">🏅 {{ team.name }}</a>
+            {% else %}
+            <div class="sidebar-section">Tournaments</div>
+            <a href="{% url 'join_tournament_list' %}" class="{% if request.resolver_match.url_name == 'join_tournament_list' or request.resolver_match.url_name == 'join_tournament' or request.resolver_match.url_name == 'create_team' %}active{% endif %}">🎯 Join a Tournament</a>
             {% endif %}
             {% if user.is_staff %}
             <div class="sidebar-section">Admin</div>

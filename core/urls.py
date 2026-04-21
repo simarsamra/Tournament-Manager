@@ -5,8 +5,16 @@ urlpatterns = [
     # Auth
     path("login/", views.login_view, name="login"),
     path("logout/", views.logout_view, name="logout"),
-    path("register/", views.register_view, name="register"),
+    path("register/", views.account_register_view, name="account_register"),
+    # Legacy aliases kept for backwards compat
+    path("register/legacy/", views.register_view, name="register"),
     path("tournament/<int:pk>/register/", views.register_view, name="tournament_register"),
+
+    # Tournament join flow (post-login)
+    path("join/", views.join_tournament_list_view, name="join_tournament_list"),
+    path("tournament/<int:pk>/join/", views.join_tournament_view, name="join_tournament"),
+    path("tournament/<int:tournament_pk>/join/<int:team_pk>/", views.join_team_view, name="join_team"),
+    path("tournament/<int:pk>/create-team/", views.create_team_view, name="create_team"),
 
     # Dashboard
     path("dashboard/", views.dashboard_view, name="dashboard"),

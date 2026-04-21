@@ -109,6 +109,67 @@ class CourtAvailabilityForm(forms.Form):
         return cleaned
 
 
+class AccountRegistrationForm(forms.Form):
+    """Step 1: Create a user account (no team yet)."""
+    full_name = forms.CharField(
+        max_length=150,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Full Name"}),
+        help_text="Your real name, shown to your team.",
+    )
+    username = forms.CharField(
+        max_length=150,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Username"}),
+        help_text="Used to log in.",
+    )
+    password = forms.CharField(
+        widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Password"})
+    )
+    password_confirm = forms.CharField(
+        label="Confirm password",
+        widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Confirm Password"}),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("password") != cleaned.get("password_confirm"):
+            raise forms.ValidationError("Passwords do not match.")
+        if User.objects.filter(username=cleaned.get("username", "").strip()).exists():
+            raise forms.ValidationError("Username already taken.")
+        return cleaned
+
+
+class CreateTeamForm(forms.Form):
+    """Step 2: Create a new team inside an open tournament."""
+    team_name = forms.CharField(
+        max_length=100,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Team Name"}),
+    )
+    preferred_courts = forms.ModelMultipleChoiceField(
+        queryset=Court.objects.none(),
+        required=False,
+        widget=forms.CheckboxSelectMultiple(),
+        help_text="Select the courts your team prefers for scheduled matches.",
+    )
+
+    def __init__(self, *args, tournament=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.tournament = tournament
+        if tournament:
+            courts = Court.objects.filter(tournament=tournament, is_available=True).order_by("name")
+            self.fields["preferred_courts"].queryset = courts
+            self.fields["preferred_courts"].required = courts.exists()
+            if not courts.exists():
+                self.fields["preferred_courts"].help_text = "No courts are currently available for preference selection."
+
+    def clean(self):
+        cleaned = super().clean()
+        courts = cleaned.get("preferred_courts")
+        if self.tournament and self.tournament.courts.filter(is_available=True).exists() and not courts:
+            raise forms.ValidationError("Please select at least one preferred court.")
+        return cleaned
+
+
+# Keep for backwards compat with bulk-add (organiser tool) — still used in _create_teams_from_data
 class TeamRegistrationForm(forms.Form):
     team_name = forms.CharField(
         max_length=100,
@@ -124,60 +185,6 @@ class TeamRegistrationForm(forms.Form):
     password_confirm = forms.CharField(
         widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Confirm Password"})
     )
-    player_names = forms.CharField(
-        required=False,
-        widget=forms.Textarea(attrs={
-            "class": "form-control", "rows": 4,
-            "placeholder": "Enter player names, one per line"
-        }),
-        help_text="One player name per line (real names of team members)"
-    )
-    preferred_courts = forms.ModelMultipleChoiceField(
-        queryset=Court.objects.none(),
-        required=False,
-        widget=forms.CheckboxSelectMultiple(),
-        help_text="Select at least one preferred court when options are available.",
-    )
-    confirm_registration = forms.BooleanField(
-        required=True,
-        error_messages={
-            "required": "Please confirm that the team information is correct before registering.",
-        },
-        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
-    )
-
-    def __init__(self, *args, tournament=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.tournament = tournament
-        if tournament:
-            courts = Court.objects.filter(tournament=tournament, is_available=True).order_by("name")
-            self.fields["preferred_courts"].queryset = courts
-            self.fields["preferred_courts"].required = courts.exists()
-            if courts.exists():
-                self.fields["preferred_courts"].help_text = "Select the courts your team prefers for scheduled matches."
-            else:
-                self.fields["preferred_courts"].help_text = "No courts are currently available for preference selection yet."
-
-    def clean(self):
-        cleaned = super().clean()
-        if cleaned.get("password") != cleaned.get("password_confirm"):
-            raise forms.ValidationError("Passwords do not match.")
-        if User.objects.filter(username=cleaned.get("username")).exists():
-            raise forms.ValidationError("Username already taken.")
-
-        required_players = max(1, (self.tournament.players_per_team if self.tournament else 1))
-        player_names = [
-            line.strip() for line in (cleaned.get("player_names") or "").splitlines() if line.strip()
-        ]
-        if len(player_names) < required_players:
-            raise forms.ValidationError(
-                f"Please provide at least {required_players} player name(s)."
-            )
-
-        courts = cleaned.get("preferred_courts")
-        if self.tournament and self.tournament.courts.filter(is_available=True).exists() and not courts:
-            raise forms.ValidationError("Please select at least one preferred court.")
-        return cleaned
 
 
 class ScoreSubmitForm(forms.Form):

@@ -165,7 +165,7 @@ class Team(models.Model):
         ("withdrawn", "Withdrawn"),
     ]
 
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="team")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="captained_teams")
     tournament = models.ForeignKey(
         Tournament, on_delete=models.CASCADE, related_name="teams"
     )
@@ -178,7 +178,7 @@ class Team(models.Model):
     seed = models.IntegerField(default=0)
 
     class Meta:
-        unique_together = ["tournament", "name"]
+        unique_together = [["tournament", "name"], ["tournament", "user"]]
 
     def __str__(self):
         return self.name
@@ -204,12 +204,13 @@ class TeamMembership(models.Model):
     ]
 
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="memberships")
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="team_membership")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="memberships")
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="member")
     joined_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["role", "joined_at"]
+        unique_together = [["team", "user"]]
 
     def __str__(self):
         return f"{self.user.username} ({self.get_role_display()}) — {self.team.name}"
