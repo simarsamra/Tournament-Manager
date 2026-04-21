@@ -1,5 +1,6 @@
 """Standings calculation and bracket progression logic."""
 from collections import defaultdict
+from django.db import models
 from django.db.models import Max
 from .models import Match, Team
 
@@ -152,7 +153,7 @@ def check_group_stage_complete(tournament):
 
     # Group stage complete – generate knockout from top teams
     groups = set(
-        tournament.teams.filter(status="active", group__gt="").values_list("group", flat=True)
+        tournament.teams.filter(status="active").exclude(group="").values_list("group", flat=True)
     )
     advancing = []
     for group_name in sorted(groups):
@@ -165,7 +166,9 @@ def check_group_stage_complete(tournament):
         ko_matches = tournament.matches.filter(group="", bracket_type="winners")
         if ko_matches.exists():
             # If slots are already filled, bracket has already been initialized.
-            if ko_matches.filter(team1__isnull=False).exists() or ko_matches.filter(team2__isnull=False).exists():
+            if ko_matches.filter(
+                models.Q(team1__isnull=False) | models.Q(team2__isnull=False)
+            ).exists():
                 return False
 
             first_round_number = ko_matches.order_by("round_number").values_list("round_number", flat=True).first()

@@ -317,9 +317,9 @@ def generate_hybrid(tournament):
                 match_num += 1
 
     # Pre-create knockout placeholders (TBD) so schedule is visible from start.
+    advance_count = max(0, tournament.teams_per_group_advance or 0)
     advancing_slots = sum(
-        min(len(group_teams), max(1, tournament.teams_per_group_advance))
-        for group_teams in groups.values()
+        min(len(group_teams), advance_count) for group_teams in groups.values()
     )
     if advancing_slots >= 2:
         # Use the furthest group-stage round as the knockout round-number offset.
