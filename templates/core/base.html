@@ -65,7 +65,10 @@
                 {% elif user.is_staff %}
                 <span class="text-muted">Organizer: <strong>{{ user.username }}</strong></span>
                 {% endif %}
-                <a href="{% url 'logout' %}" class="btn btn-outline btn-sm">Logout</a>
+                <form method="post" action="{% url 'logout' %}" style="display:inline;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline btn-sm">Logout</button>
+                </form>
             </div>
         </header>
         <div class="content">

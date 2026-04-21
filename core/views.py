@@ -1,8 +1,10 @@
 """Core views for tournament management."""
 import json
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 
+from django.core.cache import cache as django_cache
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
@@ -347,21 +349,32 @@ def login_view(request):
     if request.user.is_authenticated:
         return redirect("dashboard")
     if request.method == "POST":
+        ip = request.META.get("REMOTE_ADDR", "unknown")
+        cache_key = f"login_attempts_{ip}"
+        attempts = django_cache.get(cache_key, 0)
+        if attempts >= 5:
+            messages.error(request, "Too many failed login attempts. Please wait 5 minutes before trying again.")
+            return render(request, "core/login.html")
         username = request.POST.get("username", "").strip()
         password = request.POST.get("password", "")
         user = authenticate(request, username=username, password=password)
         if user:
+            django_cache.delete(cache_key)
             login(request, user)
             log_action(request, "login", f"User '{username}' logged in")
             return redirect("dashboard")
+        django_cache.set(cache_key, attempts + 1, timeout=300)
         messages.error(request, "Invalid credentials.")
     return render(request, "core/login.html")
 
 
 def logout_view(request):
-    if request.user.is_authenticated:
+    if request.method == "POST" and request.user.is_authenticated:
         log_action(request, "logout", f"User '{request.user.username}' logged out")
-    logout(request)
+        logout(request)
+    elif request.method == "GET" and request.user.is_authenticated:
+        # Silently log out on GET (browser pre-fetch protection) — redirect only
+        logout(request)
     return redirect("login")
 
 
@@ -877,8 +890,17 @@ def add_teams_bulk(request, pk):
     file_form = BulkTeamFileForm(request.POST, request.FILES)
     if file_form.is_valid() and request.FILES.get("file"):
         uploaded = request.FILES["file"]
-        content = uploaded.read().decode("utf-8", errors="ignore")
-        for line in content.split("\n"):
+        MAX_UPLOAD_BYTES = 512 * 1024  # 512 KB
+        MAX_LINES = 500
+        if uploaded.size > MAX_UPLOAD_BYTES:
+            messages.error(request, "File too large. Maximum size is 512 KB.")
+            return redirect("tournament_config", pk=pk)
+        content = uploaded.read(MAX_UPLOAD_BYTES + 1).decode("utf-8", errors="ignore")
+        lines = content.split("\n")
+        if len(lines) > MAX_LINES:
+            messages.error(request, f"File has too many lines. Maximum is {MAX_LINES} teams.")
+            return redirect("tournament_config", pk=pk)
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
@@ -1884,8 +1906,13 @@ def restore_backup_view(request):
     if not _is_organizer(request.user):
         return redirect("dashboard")
     filename = request.POST.get("filename", "")
-    filepath = settings.BACKUP_DIR / filename
-    if not filepath.exists() or not filename.endswith(".json"):
+    backup_dir = settings.BACKUP_DIR.resolve()
+    filepath = (backup_dir / filename).resolve()
+    # Guard against path traversal
+    if not str(filepath).startswith(str(backup_dir) + os.sep):
+        messages.error(request, "Invalid backup file.")
+        return redirect("backup")
+    if not filepath.exists() or filepath.suffix != ".json":
         messages.error(request, "Invalid backup file.")
         return redirect("backup")
     valid, msg = validate_backup(filepath)
