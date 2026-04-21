@@ -56,6 +56,8 @@ html[data-theme="dark"] .empty-state { background: #1e293b; }
 html[data-theme="dark"] .row-selected { background: #1e3a5f; color: #f1f5f9; }
 html[data-theme="dark"] .row-me       { background: #1e3a5f; color: #f1f5f9; }
 html[data-theme="dark"] .row-advance  { background: #14532d; color: #bbf7d0; }
+.row-advance a  { color: inherit; }
+html[data-theme="dark"] .row-advance a { color: #bbf7d0; }
 html[data-theme="dark"] .info-panel   { background: #1e293b; }
 html[data-theme="dark"] .info-success { background: #052e16; border-color: #166534; color: #bbf7d0; }
 html[data-theme="dark"] .info-warning { background: #1c1407; border-color: #92400e; color: #fcd34d; }
@@ -278,6 +280,13 @@ td {
 
 tr:hover { background: #eff6ff; }
 
+table a {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 500;
+}
+table a:hover { text-decoration: underline; }
+
 /* Badges */
 .badge {
     display: inline-block;
@@ -424,6 +433,15 @@ tr:hover { background: #eff6ff; }
 
 .slot-option-radio:checked + .slot-option-body .slot-team-context {
     display: grid;
+}
+
+.slot-submit-inline {
+    display: none;
+    margin-top: 0.6rem;
+}
+
+.slot-option-radio:checked + .slot-option-body .slot-submit-inline {
+    display: inline-flex;
 }
 
 .slot-context-title {

@@ -1,3 +1,39 @@
+{% if reschedule_requests %}
+<div class="card mb-2 card-warning">
+    <div class="card-header">🔄 Reschedule Requests</div>
+    <div class="card-body">
+        <div class="table-container">
+        <table>
+            <tr><th>Requested By</th><th>New Time</th><th>Court</th><th>Reason</th><th>Status</th><th></th></tr>
+            {% for rr in reschedule_requests %}
+            <tr>
+                <td>{{ rr.requested_by.name }}</td>
+                <td>{{ rr.new_time|date:"M d, H:i" }}</td>
+                <td>{{ rr.new_court.name|default:"-" }}</td>
+                <td>{{ rr.reason|default:"-" }}</td>
+                <td><span class="badge badge-{{ rr.status }}">{{ rr.get_status_display }}</span></td>
+                <td>
+                    {% if rr.status == "pending" and is_participant and rr.requested_by != team %}
+                    <form method="post" action="{% url 'respond_reschedule' pk=rr.pk %}" style="display:inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="approve">
+                        <button type="submit" class="btn btn-success btn-sm">Approve</button>
+                    </form>
+                    <form method="post" action="{% url 'respond_reschedule' pk=rr.pk %}" style="display:inline;">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="reject">
+                        <button type="submit" class="btn btn-danger btn-sm">Reject</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <div class="grid grid-2">
     <div class="card">
         <div class="card-header">Match Info</div>
@@ -175,6 +211,7 @@
                                         </div>
                                         {% endfor %}
                                     </div>
+                                    <button type="submit" class="btn btn-primary btn-sm slot-submit-inline">&#10003; Request Reschedule with this Slot</button>
                                 </div>
                             </label>
                             {% endfor %}
@@ -198,46 +235,10 @@
                     <div class="form-group">
                         <label>Reason</label>{{ reschedule_form.reason }}
                     </div>
-                    <button type="submit" class="btn btn-outline">Request Reschedule</button>
+                    <button type="submit" class="btn btn-outline">Request Reschedule (manual)</button>
                 </form>
             </div>
         </div>
         {% endif %}
     </div>
 </div>
-
-{% if reschedule_requests %}
-<div class="card mt-2">
-    <div class="card-header">Reschedule Requests</div>
-    <div class="card-body">
-        <div class="table-container">
-        <table>
-            <tr><th>Requested By</th><th>New Time</th><th>Court</th><th>Reason</th><th>Status</th><th></th></tr>
-            {% for rr in reschedule_requests %}
-            <tr>
-                <td>{{ rr.requested_by.name }}</td>
-                <td>{{ rr.new_time|date:"M d, H:i" }}</td>
-                <td>{{ rr.new_court.name|default:"-" }}</td>
-                <td>{{ rr.reason|default:"-" }}</td>
-                <td><span class="badge badge-{{ rr.status }}">{{ rr.get_status_display }}</span></td>
-                <td>
-                    {% if rr.status == "pending" and is_participant and rr.requested_by != team %}
-                    <form method="post" action="{% url 'respond_reschedule' pk=rr.pk %}" style="display:inline;">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="approve">
-                        <button type="submit" class="btn btn-success btn-sm">Approve</button>
-                    </form>
-                    <form method="post" action="{% url 'respond_reschedule' pk=rr.pk %}" style="display:inline;">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="reject">
-                        <button type="submit" class="btn btn-danger btn-sm">Reject</button>
-                    </form>
-                    {% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </table>
-        </div>
-    </div>
-</div>
-{% endif %}

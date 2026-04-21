@@ -295,7 +295,7 @@ def _build_open_slot_choices(match, slots):
                 scheduled_time__isnull=False,
             )
             .exclude(pk=match.pk)
-            .exclude(status__in=["cancelled", "bye"])
+            .exclude(status__in=["cancelled", "bye", "confirmed", "forfeited"])
             .filter(Q(team1_id__in=team_ids) | Q(team2_id__in=team_ids))
             .select_related("team1", "team2", "court")
             .order_by("scheduled_time", "match_number")
