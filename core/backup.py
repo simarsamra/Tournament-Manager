@@ -122,7 +122,11 @@ def list_backups():
 
 def delete_backup(filename):
     """Delete a backup file."""
-    filepath = Path(settings.BACKUP_DIR) / filename
+    backup_dir = Path(settings.BACKUP_DIR).resolve()
+    filepath = (backup_dir / filename).resolve()
+    # Guard against path traversal
+    if not str(filepath).startswith(str(backup_dir) + os.sep):
+        return False
     if filepath.exists() and filepath.suffix == ".json":
         filepath.unlink()
         BackupRecord.objects.filter(filename=filename).delete()

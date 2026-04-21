@@ -5,7 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Tournament Manager{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <script>!function(){var t=localStorage.getItem('tm-theme');if(t)document.documentElement.setAttribute('data-theme',t);}();</script>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}?v={% now 'YmdHis' %}">
     {% block extra_css %}{% endblock %}
 </head>
 <body>
@@ -26,6 +27,10 @@
             <div class="sidebar-section">Actions</div>
             <a href="{% url 'rescheduling' %}" class="{% if request.resolver_match.url_name == 'rescheduling' %}active{% endif %}">🔄 Rescheduling</a>
             <a href="{% url 'open_slots' %}" class="{% if request.resolver_match.url_name == 'open_slots' %}active{% endif %}">📅 Open Slots</a>
+            {% if team %}
+            <div class="sidebar-section">My Team</div>
+            <a href="{% url 'team_detail' pk=team.pk %}" class="{% if request.resolver_match.url_name == 'team_detail' %}active{% endif %}">🏅 {{ team.name }}</a>
+            {% endif %}
             {% if user.is_staff %}
             <div class="sidebar-section">Admin</div>
             <a href="{% url 'tournament_setup' %}" class="{% if request.resolver_match.url_name == 'tournament_setup' %}active{% endif %}">⚙️ New Tournament</a>
@@ -57,11 +62,23 @@
                 </form>
                 {% endif %}
                 {% if team %}
-                <span class="text-muted">Team: <strong>{{ team.name }}</strong></span>
+                <a href="{% url 'team_detail' pk=team.pk %}" class="btn btn-outline btn-sm">&#9881;&#65039; {{ team.name }}</a>
                 {% elif user.is_staff %}
                 <span class="text-muted">Organizer: <strong>{{ user.username }}</strong></span>
                 {% endif %}
-                <a href="{% url 'logout' %}" class="btn btn-outline btn-sm">Logout</a>
+                <form method="post" action="{% url 'logout' %}" style="display:inline;">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-outline btn-sm">Logout</button>
+                </form>
+                <div class="theme-picker">
+                    <label for="themeSelect" style="font-size:1.1rem;cursor:default;" title="Theme">🎨</label>
+                    <select id="themeSelect" class="form-select" style="width:auto;padding:0.3rem 0.55rem;font-size:0.85rem;">
+                        <option value="default">Default</option>
+                        <option value="dark">Dark</option>
+                        <option value="emerald">Emerald</option>
+                        <option value="purple">Purple</option>
+                    </select>
+                </div>
             </div>
         </header>
         <div class="content">
@@ -84,7 +101,7 @@
     {% block public_content %}{% endblock %}
 </div>
 {% endif %}
-<script src="{% static 'js/app.js' %}"></script>
+<script src="{% static 'js/app.js' %}?v={% now 'YmdHis' %}"></script>
 {% block extra_js %}{% endblock %}
 </body>
 </html>

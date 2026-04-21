@@ -41,6 +41,9 @@ class Tournament(models.Model):
         max_length=20,
         choices=[
             ("setup", "Setup"),
+            ("registration_open", "Registration Open"),
+            ("ready", "Ready for Scheduling"),
+            ("scheduled", "Schedule Draft Ready"),
             ("active", "Active"),
             ("completed", "Completed"),
         ],
@@ -186,12 +189,30 @@ class Player(models.Model):
         return f"{self.name} ({self.team.name})"
 
 
+class TeamMembership(models.Model):
+    ROLE_CHOICES = [
+        ("captain", "Captain"),
+        ("member", "Member"),
+    ]
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="memberships")
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="team_membership")
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="member")
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["role", "joined_at"]
+
+    def __str__(self):
+        return f"{self.user.username} ({self.get_role_display()}) — {self.team.name}"
+
+
 class Match(models.Model):
     STATUS_CHOICES = [
         ("upcoming", "Upcoming"),
         ("in_progress", "In Progress"),
         ("pending_confirmation", "Pending Confirmation"),
-        ("confirmed", "Confirmed"),
+        ("confirmed", "Done"),
         ("disputed", "Disputed"),
         ("cancelled", "Cancelled"),
         ("forfeited", "Forfeited"),
@@ -284,6 +305,39 @@ class RescheduleRequest(models.Model):
         return f"Reschedule for {self.match} by {self.requested_by}"
 
 
+class NoShowReport(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Pending Response"),
+        ("resolved", "Resolved"),
+        ("auto_forfeited", "Auto Forfeited"),
+        ("cancelled", "Cancelled"),
+    ]
+
+    match = models.ForeignKey(
+        Match, on_delete=models.CASCADE, related_name="no_show_reports"
+    )
+    reported_by = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="no_show_reports_made"
+    )
+    absent_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="no_show_reports_against"
+    )
+    present_team = models.ForeignKey(
+        Team, on_delete=models.CASCADE, related_name="no_show_reports_supported"
+    )
+    note = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    deadline_at = models.DateTimeField()
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"No-show report for {self.match} against {self.absent_team.name}"
+
+
 class OpenSlot(models.Model):
     tournament = models.ForeignKey(
         Tournament, on_delete=models.CASCADE, related_name="open_slots"
@@ -298,7 +352,9 @@ class OpenSlot(models.Model):
         ordering = ["start_time"]
 
     def __str__(self):
-        return f"{self.court.name}: {self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
+        start = timezone.localtime(self.start_time)
+        end = timezone.localtime(self.end_time)
+        return f"{self.court.name} · {start.strftime('%a, %b %d, %Y %H:%M')} - {end.strftime('%H:%M')}"
 
 
 class AuditLog(models.Model):

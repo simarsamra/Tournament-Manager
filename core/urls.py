@@ -6,6 +6,7 @@ urlpatterns = [
     path("login/", views.login_view, name="login"),
     path("logout/", views.logout_view, name="logout"),
     path("register/", views.register_view, name="register"),
+    path("tournament/<int:pk>/register/", views.register_view, name="tournament_register"),
 
     # Dashboard
     path("dashboard/", views.dashboard_view, name="dashboard"),
@@ -18,6 +19,9 @@ urlpatterns = [
     path("tournament/<int:pk>/add-court-availability/", views.add_court_availability, name="add_court_availability"),
     path("tournament/<int:pk>/add-timeslot/", views.add_timeslot, name="add_timeslot"),
     path("tournament/<int:pk>/add-teams/", views.add_teams_bulk, name="add_teams_bulk"),
+    path("tournament/<int:pk>/open-registration/", views.open_registration, name="open_registration"),
+    path("tournament/<int:pk>/close-registration/", views.close_registration, name="close_registration"),
+    path("tournament/<int:pk>/generate-schedule/", views.generate_schedule, name="generate_schedule"),
     path("tournament/<int:pk>/start/", views.start_tournament, name="start_tournament"),
     path("tournament/select/", views.select_tournament, name="select_tournament"),
     path("tournament/<int:pk>/delete/", views.delete_tournament, name="delete_tournament"),
@@ -31,6 +35,7 @@ urlpatterns = [
     path("match/<int:pk>/confirm-score/", views.confirm_score, name="confirm_score"),
     path("match/<int:pk>/dispute-score/", views.dispute_score, name="dispute_score"),
     path("match/<int:pk>/resolve-dispute/", views.resolve_dispute, name="resolve_dispute"),
+    path("match/<int:pk>/report-no-show/", views.report_no_show, name="report_no_show"),
     path("match/<int:pk>/mark-no-show/", views.mark_no_show, name="mark_no_show"),
 
     # Rescheduling
@@ -43,6 +48,10 @@ urlpatterns = [
     path("team/<int:pk>/", views.team_detail, name="team_detail"),
     path("team/<int:pk>/withdraw/", views.withdraw_team, name="withdraw_team"),
     path("team/<int:pk>/preferences/", views.team_preferences, name="team_preferences"),
+    path("team/<int:pk>/members/add/", views.manage_team_members, name="manage_team_members"),
+    path("team/<int:pk>/members/<int:user_pk>/remove/", views.remove_team_member, name="remove_team_member"),
+    path("team/<int:pk>/members/<int:user_pk>/reset-password/", views.reset_member_password, name="reset_member_password"),
+    path("team/<int:pk>/captain/reset-password/", views.reset_captain_password, name="reset_captain_password"),
 
     # Standings
     path("standings/", views.standings_view, name="standings"),

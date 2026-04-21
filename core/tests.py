@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.db import models
 from datetime import timedelta
 
-from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player
+from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player, OpenSlot, RescheduleRequest
 from .scheduling import generate_fixtures
 from .standings import calculate_standings, advance_winner
 from .withdrawals import handle_withdrawal
@@ -44,6 +44,8 @@ class UXAndLogicRegressionTests(TestCase):
 
 	def test_register_duplicate_team_name_shows_form_error(self):
 		tournament = self._create_tournament()
+		tournament.status = "registration_open"
+		tournament.save(update_fields=["status"])
 		self._create_team(tournament, "Falcons", username="existing_user")
 
 		response = self.client.post(
@@ -54,6 +56,7 @@ class UXAndLogicRegressionTests(TestCase):
 				"password": "abc12345",
 				"password_confirm": "abc12345",
 				"player_names": "Alice",
+				"confirm_registration": "on",
 			},
 		)
 
@@ -98,6 +101,131 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(tournament.time_slots.count(), 0)
 		messages = [str(m) for m in response.context["messages"]]
 		self.assertTrue(any("End time must be after start time" in m for m in messages))
+
+	def test_add_court_availability_supports_bulk_creation_and_skips_duplicates(self):
+		tournament = self._create_tournament(name="Bulk Availability")
+		court1 = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
+		court2 = Court.objects.create(tournament=tournament, name="Court B", is_available=True)
+		self.client.force_login(self.organizer)
+
+		payload = {
+			"courts": [str(court1.pk), str(court2.pk)],
+			"weekdays": ["0", "2"],
+			"start_time": "09:00",
+			"end_time": "11:00",
+			"start_date": "2026-04-20",
+			"end_date": "2026-04-30",
+			"is_active": "on",
+		}
+
+		response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			payload,
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(CourtAvailability.objects.filter(court__tournament=tournament).count(), 4)
+		messages = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("4" in m and "availability" in m.lower() for m in messages))
+
+		duplicate_response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			payload,
+			follow=True,
+		)
+
+		self.assertEqual(duplicate_response.status_code, 200)
+		self.assertEqual(CourtAvailability.objects.filter(court__tournament=tournament).count(), 4)
+		duplicate_messages = [str(m) for m in duplicate_response.context["messages"]]
+		self.assertTrue(any("skipped" in m.lower() for m in duplicate_messages))
+
+	def test_add_court_availability_rejects_invalid_bulk_time_range(self):
+		tournament = self._create_tournament(name="Bad Availability")
+		court = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			{
+				"courts": [str(court.pk)],
+				"weekdays": ["1"],
+				"start_time": "15:00",
+				"end_time": "14:00",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(CourtAvailability.objects.filter(court__tournament=tournament).count(), 0)
+		messages = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("End time must be after start time" in m for m in messages))
+
+	def test_add_court_defaults_to_available_and_shows_on_registration(self):
+		tournament = self._create_tournament(name="Availability Default")
+		tournament.status = "registration_open"
+		tournament.save(update_fields=["status"])
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("add_court", kwargs={"pk": tournament.pk}),
+			{"name": "Center Court"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		court = Court.objects.get(tournament=tournament, name="Center Court")
+		self.assertTrue(court.is_available)
+		self.client.logout()
+
+		register_response = self.client.get(
+			reverse("tournament_register", kwargs={"pk": tournament.pk})
+		)
+		self.assertEqual(register_response.status_code, 200)
+		self.assertContains(register_response, "Center Court")
+
+	def test_active_availability_marks_court_available(self):
+		tournament = self._create_tournament(name="Availability Reactivate")
+		court = Court.objects.create(tournament=tournament, name="Court A", is_available=False)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			{
+				"courts": [str(court.pk)],
+				"weekdays": ["1"],
+				"start_time": "09:00",
+				"end_time": "11:00",
+				"is_active": "on",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		court.refresh_from_db()
+		self.assertTrue(court.is_available)
+
+	def test_registration_requires_confirmation_checkbox(self):
+		open_tournament = self._create_tournament(name="Confirmed Entry")
+		open_tournament.status = "registration_open"
+		open_tournament.save(update_fields=["status"])
+		court = Court.objects.create(tournament=open_tournament, name="Court A", is_available=True)
+
+		response = self.client.post(
+			reverse("tournament_register", kwargs={"pk": open_tournament.pk}),
+			{
+				"team_name": "Joiners",
+				"username": "joiners_user_blocked",
+				"password": "abc12345",
+				"password_confirm": "abc12345",
+				"player_names": "Alice",
+				"preferred_courts": [str(court.pk)],
+			},
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertFalse(Team.objects.filter(tournament=open_tournament, name="Joiners").exists())
+		self.assertContains(response, "Please confirm that the team information is correct")
 
 	def test_organizer_can_delete_tournament(self):
 		tournament = self._create_tournament(name="Delete Me")
@@ -184,6 +312,65 @@ class UXAndLogicRegressionTests(TestCase):
 		tournament = form.save()
 		self.assertEqual(str(tournament.start_date), "2026-05-01")
 		self.assertEqual(tournament.expected_teams_count, 4)
+
+	def test_tournament_specific_registration_creates_team_in_correct_tournament(self):
+		open_tournament = self._create_tournament(name="Open Cup")
+		open_tournament.status = "registration_open"
+		open_tournament.save(update_fields=["status"])
+		other_tournament = self._create_tournament(name="Other Cup")
+		court = Court.objects.create(tournament=open_tournament, name="Court A", is_available=True)
+
+		response = self.client.post(
+			reverse("tournament_register", kwargs={"pk": open_tournament.pk}),
+			{
+				"team_name": "Joiners",
+				"username": "joiners_user",
+				"password": "abc12345",
+				"password_confirm": "abc12345",
+				"player_names": "Alice",
+				"preferred_courts": [str(court.pk)],
+				"confirm_registration": "on",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(Team.objects.filter(tournament=open_tournament, name="Joiners").exists())
+		self.assertFalse(Team.objects.filter(tournament=other_tournament, name="Joiners").exists())
+
+	def test_organizer_generates_schedule_draft_then_publishes_tournament(self):
+		tournament = self._create_tournament(name="Draft Flow")
+		tournament.expected_teams_count = 2
+		tournament.start_date = timezone.localdate() + timedelta(days=1)
+		tournament.save(update_fields=["expected_teams_count", "start_date"])
+		court = Court.objects.create(tournament=tournament, name="Court 1", is_available=True)
+		CourtAvailability.objects.create(
+			court=court,
+			weekday=tournament.start_date.weekday(),
+			start_time="12:00",
+			end_time="14:00",
+			start_date=tournament.start_date,
+		)
+		for name in ("Team A", "Team B"):
+			team = self._create_team(tournament, name)
+			Player.objects.create(team=team, name=f"{name} Player")
+			team.preferred_courts.add(court)
+		self.client.force_login(self.organizer)
+
+		self.client.post(reverse("open_registration", kwargs={"pk": tournament.pk}), follow=True)
+		self.client.post(reverse("close_registration", kwargs={"pk": tournament.pk}), follow=True)
+		draft_response = self.client.post(reverse("generate_schedule", kwargs={"pk": tournament.pk}), follow=True)
+
+		self.assertEqual(draft_response.status_code, 200)
+		tournament.refresh_from_db()
+		self.assertEqual(tournament.status, "scheduled")
+		self.assertGreater(tournament.matches.count(), 0)
+
+		publish_response = self.client.post(reverse("start_tournament", kwargs={"pk": tournament.pk}), follow=True)
+		self.assertEqual(publish_response.status_code, 200)
+		tournament.refresh_from_db()
+		self.assertEqual(tournament.status, "active")
+		self.assertIsNotNone(tournament.started_at)
 
 	def test_start_tournament_requires_expected_team_count_and_preferences(self):
 		tournament = self._create_tournament(name="Strict Start")
@@ -286,6 +473,391 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(match.scheduled_time.hour, 12)
 		self.assertEqual(match.scheduled_end_time.hour, 12)
 		self.assertEqual(match.scheduled_end_time.minute, 30)
+
+	def test_generate_fixtures_prevents_same_team_multiple_matches_on_same_day(self):
+		tournament = self._create_tournament(name="No Same Day Double Booking")
+		start_date = timezone.localdate() + timedelta(days=1)
+		tournament.start_date = start_date
+		tournament.save(update_fields=["start_date"])
+		court1 = Court.objects.create(tournament=tournament, name="FOF1", is_available=True)
+		court2 = Court.objects.create(tournament=tournament, name="MOF2", is_available=True)
+
+		for court in (court1, court2):
+			for day_offset in range(6):
+				day = start_date + timedelta(days=day_offset)
+				CourtAvailability.objects.create(
+					court=court,
+					weekday=day.weekday(),
+					start_time="12:00",
+					end_time="13:00",
+					start_date=day,
+					end_date=day,
+				)
+
+		teams = [self._create_team(tournament, f"Team{i}", seed=i) for i in range(1, 5)]
+		for team in teams:
+			Player.objects.create(team=team, name=f"{team.name} Player")
+			team.preferred_courts.add(court1, court2)
+
+		generate_fixtures(tournament)
+
+		for team in teams:
+			seen_days = set()
+			team_matches = tournament.matches.filter(models.Q(team1=team) | models.Q(team2=team))
+			for match in team_matches:
+				self.assertIsNotNone(match.scheduled_time)
+				match_day = timezone.localtime(match.scheduled_time).date()
+				self.assertNotIn(match_day, seen_days, f"{team.name} was scheduled twice on {match_day}")
+				seen_days.add(match_day)
+
+	def test_confirming_match_ahead_of_schedule_creates_open_slot(self):
+		tournament = self._create_tournament(name="Early Finish Opens Slot")
+		court = Court.objects.create(tournament=tournament, name="Court 1", is_available=True)
+		team1 = self._create_team(tournament, "Alpha", username="alpha_open_slot")
+		team2 = self._create_team(tournament, "Beta", username="beta_open_slot")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=1,
+			team1=team1,
+			team2=team2,
+			court=court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+
+		self.client.force_login(team1.user)
+		submit_response = self.client.post(
+			reverse("submit_score", kwargs={"pk": match.pk}),
+			{"score_team1": 3, "score_team2": 1, "notes": "Played early"},
+			follow=True,
+		)
+		self.assertEqual(submit_response.status_code, 200)
+
+		self.client.force_login(team2.user)
+		confirm_response = self.client.post(reverse("confirm_score", kwargs={"pk": match.pk}), follow=True)
+
+		self.assertEqual(confirm_response.status_code, 200)
+		match.refresh_from_db()
+		self.assertEqual(match.status, "confirmed")
+		self.assertEqual(tournament.open_slots.count(), 1)
+		slot = tournament.open_slots.first()
+		self.assertEqual(slot.court, court)
+		self.assertEqual(slot.start_time, match.scheduled_time)
+		self.assertEqual(slot.end_time, match.scheduled_end_time)
+
+	def test_open_slots_view_syncs_completed_future_matches(self):
+		tournament = self._create_tournament(name="Synced Open Slots")
+		court = Court.objects.create(tournament=tournament, name="Court Sync", is_available=True)
+		team1 = self._create_team(tournament, "Sync A", username="sync_a_user")
+		team2 = self._create_team(tournament, "Sync B", username="sync_b_user")
+		Match.objects.create(
+			tournament=tournament,
+			match_number=2,
+			team1=team1,
+			team2=team2,
+			court=court,
+			scheduled_time=timezone.now() + timedelta(days=2),
+			scheduled_end_time=timezone.now() + timedelta(days=2, minutes=30),
+			status="confirmed",
+			winner=team1,
+		)
+
+		self.client.force_login(self.organizer)
+		response = self.client.get(reverse("open_slots"))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(len(response.context["slots"]), 1)
+		slot = response.context["slots"][0]
+		self.assertEqual(slot.court, court)
+
+	def test_request_reschedule_can_use_open_slot_choice(self):
+		tournament = self._create_tournament(name="Open Slot Choice")
+		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
+		alt_court = Court.objects.create(tournament=tournament, name="Alt", is_available=True)
+		team1 = self._create_team(tournament, "Res A", username="res_a_user")
+		team2 = self._create_team(tournament, "Res B", username="res_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=3,
+			team1=team1,
+			team2=team2,
+			court=primary_court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		slot = OpenSlot.objects.create(
+			tournament=tournament,
+			court=alt_court,
+			start_time=timezone.now() + timedelta(days=3),
+			end_time=timezone.now() + timedelta(days=3, minutes=30),
+			reason="Free slot",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.post(
+			reverse("request_reschedule", kwargs={"pk": match.pk}),
+			{"open_slot": str(slot.pk), "reason": "Use free slot"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		rr = RescheduleRequest.objects.get(match=match, requested_by=team1)
+		self.assertEqual(rr.new_time, slot.start_time)
+		self.assertEqual(rr.new_court, alt_court)
+
+	def test_match_detail_reschedule_shows_open_slot_date_in_list(self):
+		tournament = self._create_tournament(name="Readable Slot Picker")
+		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
+		alt_court = Court.objects.create(tournament=tournament, name="Alt", is_available=True)
+		team1 = self._create_team(tournament, "Slot A", username="slot_a_user")
+		team2 = self._create_team(tournament, "Slot B", username="slot_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=4,
+			team1=team1,
+			team2=team2,
+			court=primary_court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		slot = OpenSlot.objects.create(
+			tournament=tournament,
+			court=alt_court,
+			start_time=timezone.now() + timedelta(days=4, hours=2),
+			end_time=timezone.now() + timedelta(days=4, hours=2, minutes=30),
+			reason="Readable slot",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.get(reverse("match_detail", kwargs={"pk": match.pk}))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, 'type="radio"')
+		self.assertContains(response, alt_court.name)
+		self.assertContains(response, timezone.localtime(slot.start_time).strftime("%b %d, %Y"))
+
+	def test_match_detail_shows_done_label_for_confirmed_status(self):
+		tournament = self._create_tournament(name="Done Label")
+		court = Court.objects.create(tournament=tournament, name="Center Court", is_available=True)
+		team1 = self._create_team(tournament, "Done A", username="done_a_user")
+		team2 = self._create_team(tournament, "Done B", username="done_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=43,
+			team1=team1,
+			team2=team2,
+			court=court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="confirmed",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.get(reverse("match_detail", kwargs={"pk": match.pk}))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Done")
+
+	def test_dashboard_partial_refresh_returns_section_only(self):
+		tournament = self._create_tournament(name="Live Dashboard")
+		self._create_team(tournament, "Alpha Live", username="alpha_live_dashboard")
+		self.client.force_login(self.organizer)
+
+		response = self.client.get(
+			reverse("dashboard"),
+			{"partial": "1"},
+			HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Tournament Overview")
+		self.assertNotContains(response, "<!DOCTYPE html>")
+
+	def test_match_detail_partial_refresh_returns_section_only(self):
+		tournament = self._create_tournament(name="Live Match Detail")
+		court = Court.objects.create(tournament=tournament, name="Court Live", is_available=True)
+		team1 = self._create_team(tournament, "Live A", username="live_a_user")
+		team2 = self._create_team(tournament, "Live B", username="live_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=44,
+			team1=team1,
+			team2=team2,
+			court=court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.get(
+			reverse("match_detail", kwargs={"pk": match.pk}),
+			{"partial": "1"},
+			HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Match Info")
+		self.assertContains(response, "Request Reschedule")
+		self.assertNotContains(response, "<!DOCTYPE html>")
+
+	def test_match_detail_reschedule_shows_same_day_context_for_both_teams(self):
+		tournament = self._create_tournament(name="Same Day Slot Context")
+		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
+		court_x = Court.objects.create(tournament=tournament, name="Court X", is_available=True)
+		court_z = Court.objects.create(tournament=tournament, name="Court Z", is_available=True)
+		team1 = self._create_team(tournament, "Alpha", username="alpha_same_day_context")
+		team2 = self._create_team(tournament, "Beta", username="beta_same_day_context")
+		other1 = self._create_team(tournament, "Gamma", username="gamma_same_day_context")
+		other2 = self._create_team(tournament, "Delta", username="delta_same_day_context")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=40,
+			team1=team1,
+			team2=team2,
+			court=primary_court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		slot_start = timezone.now() + timedelta(days=3, hours=2)
+		Match.objects.create(
+			tournament=tournament,
+			match_number=41,
+			team1=team1,
+			team2=other1,
+			court=court_x,
+			scheduled_time=slot_start - timedelta(hours=2),
+			scheduled_end_time=slot_start - timedelta(hours=1, minutes=30),
+			status="upcoming",
+		)
+		Match.objects.create(
+			tournament=tournament,
+			match_number=42,
+			team1=other2,
+			team2=team2,
+			court=court_z,
+			scheduled_time=slot_start - timedelta(hours=1),
+			scheduled_end_time=slot_start - timedelta(minutes=30),
+			status="upcoming",
+		)
+		OpenSlot.objects.create(
+			tournament=tournament,
+			court=primary_court,
+			start_time=slot_start,
+			end_time=slot_start + timedelta(minutes=30),
+			reason="Same-day review",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.get(reverse("match_detail", kwargs={"pk": match.pk}))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Same-day team schedules")
+		self.assertContains(response, team1.name)
+		self.assertContains(response, team2.name)
+		self.assertContains(response, court_x.name)
+		self.assertContains(response, court_z.name)
+
+	def test_request_reschedule_accepts_open_slot_backed_by_completed_match(self):
+		tournament = self._create_tournament(name="Completed Match Slot")
+		current_court = Court.objects.create(tournament=tournament, name="Current", is_available=True)
+		open_court = Court.objects.create(tournament=tournament, name="Open Court", is_available=True)
+		team1 = self._create_team(tournament, "Team 9", username="team9_user")
+		team2 = self._create_team(tournament, "Team 10", username="team10_user")
+		other1 = self._create_team(tournament, "Other A", username="other_a_user")
+		other2 = self._create_team(tournament, "Other B", username="other_b_user")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=5,
+			team1=team1,
+			team2=team2,
+			court=current_court,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		slot_start = timezone.now() + timedelta(days=3)
+		Match.objects.create(
+			tournament=tournament,
+			match_number=6,
+			team1=other1,
+			team2=other2,
+			court=open_court,
+			scheduled_time=slot_start,
+			scheduled_end_time=slot_start + timedelta(minutes=30),
+			status="confirmed",
+			winner=other1,
+		)
+		slot = OpenSlot.objects.create(
+			tournament=tournament,
+			court=open_court,
+			start_time=slot_start,
+			end_time=slot_start + timedelta(minutes=30),
+			reason="Finished early",
+		)
+
+		self.client.force_login(team1.user)
+		response = self.client.post(
+			reverse("request_reschedule", kwargs={"pk": match.pk}),
+			{"open_slot": str(slot.pk), "reason": "Move to open slot"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(RescheduleRequest.objects.filter(match=match, requested_by=team1).exists())
+		self.assertFalse(any("conflict" in str(m).lower() for m in response.context["messages"]))
+
+	def test_request_reschedule_allows_same_day_if_times_do_not_overlap(self):
+		tournament = self._create_tournament(name="Same Day Reschedule")
+		court1 = Court.objects.create(tournament=tournament, name="Court 1", is_available=True)
+		court2 = Court.objects.create(tournament=tournament, name="Court 2", is_available=True)
+		team9 = self._create_team(tournament, "Team 9", username="same_day_team9")
+		team10 = self._create_team(tournament, "Team 10", username="same_day_team10")
+		other_team = self._create_team(tournament, "Other Team", username="same_day_other")
+		third_team = self._create_team(tournament, "Third Team", username="same_day_third")
+		match = Match.objects.create(
+			tournament=tournament,
+			match_number=7,
+			team1=team9,
+			team2=team10,
+			court=court1,
+			scheduled_time=timezone.now() + timedelta(days=1),
+			scheduled_end_time=timezone.now() + timedelta(days=1, minutes=30),
+			status="upcoming",
+		)
+		same_day_start = timezone.now() + timedelta(days=2)
+		Match.objects.create(
+			tournament=tournament,
+			match_number=8,
+			team1=team9,
+			team2=other_team,
+			court=court1,
+			scheduled_time=same_day_start,
+			scheduled_end_time=same_day_start + timedelta(minutes=30),
+			status="upcoming",
+		)
+		slot = OpenSlot.objects.create(
+			tournament=tournament,
+			court=court2,
+			start_time=same_day_start + timedelta(hours=2),
+			end_time=same_day_start + timedelta(hours=2, minutes=30),
+			reason="Later same-day opening",
+		)
+
+		self.client.force_login(team10.user)
+		response = self.client.post(
+			reverse("request_reschedule", kwargs={"pk": match.pk}),
+			{"open_slot": str(slot.pk), "reason": "Later the same day"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(RescheduleRequest.objects.filter(match=match, requested_by=team10).exists())
+		self.assertFalse(any("already has another match scheduled on that day" in str(m).lower() for m in response.context["messages"]))
 
 	def test_knockout_disallows_draw_on_confirm(self):
 		tournament = self._create_tournament(fmt="knockout")
@@ -800,6 +1372,9 @@ class WithdrawalPolicyTests(TestCase):
 		team2 = self._create_team(tournament, "Team B", username="team_b4", seed=2)
 		generate_fixtures(tournament)
 		match = tournament.matches.filter(status="upcoming").first()
+		match.scheduled_time = timezone.now() - timedelta(minutes=20)
+		match.scheduled_end_time = timezone.now() + timedelta(minutes=10)
+		match.save(update_fields=["scheduled_time", "scheduled_end_time"])
 
 		self.client.force_login(self.organizer)
 		response = self.client.post(
@@ -830,6 +1405,114 @@ class WithdrawalPolicyTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		match.refresh_from_db()
 		self.assertEqual(match.status, "upcoming")
+
+	def test_team_cannot_report_no_show_before_match_time(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		team_a = self._create_team(tournament, "Team A", username="team_a_early_no_show", seed=1)
+		team_b = self._create_team(tournament, "Team B", username="team_b_early_no_show", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+		match.scheduled_time = timezone.now() + timedelta(hours=2)
+		match.scheduled_end_time = match.scheduled_time + timedelta(minutes=30)
+		match.save(update_fields=["scheduled_time", "scheduled_end_time"])
+
+		self.client.force_login(team_b.user)
+		response = self.client.post(
+			reverse("report_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team_a.pk)},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(match.no_show_reports.count(), 0)
+		self.assertContains(response, "only be reported after the scheduled match time")
+
+	def test_team_can_report_opponent_no_show_and_see_dashboard_notice(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		team_a = self._create_team(tournament, "Team A", username="team_a_no_show", seed=1)
+		team_b = self._create_team(tournament, "Team B", username="team_b_no_show", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+		match.scheduled_time = timezone.now() - timedelta(minutes=20)
+		match.scheduled_end_time = timezone.now() + timedelta(minutes=10)
+		match.save(update_fields=["scheduled_time", "scheduled_end_time"])
+
+		self.client.force_login(team_b.user)
+		response = self.client.post(
+			reverse("report_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team_a.pk)},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		match.refresh_from_db()
+		self.assertEqual(match.status, "upcoming")
+		self.assertEqual(match.no_show_reports.filter(status="pending").count(), 1)
+		self.assertContains(response, "No-show reported")
+
+		self.client.force_login(team_a.user)
+		response = self.client.get(reverse("dashboard"))
+		self.assertContains(response, "No-show notice")
+
+	def test_reschedule_request_by_reported_team_clears_pending_no_show(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		court = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
+		team_a = self._create_team(tournament, "Team A", username="team_a_reschedule", seed=1)
+		team_b = self._create_team(tournament, "Team B", username="team_b_reschedule", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+		match.court = court
+		match.scheduled_time = timezone.now() - timedelta(minutes=20)
+		match.scheduled_end_time = timezone.now() + timedelta(minutes=10)
+		match.save(update_fields=["court", "scheduled_time", "scheduled_end_time"])
+
+		self.client.force_login(team_b.user)
+		self.client.post(
+			reverse("report_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team_a.pk)},
+			follow=True,
+		)
+
+		self.client.force_login(team_a.user)
+		response = self.client.post(
+			reverse("request_reschedule", kwargs={"pk": match.pk}),
+			{
+				"new_date": (timezone.localdate() + timedelta(days=2)).isoformat(),
+				"new_time": "11:00",
+				"new_court": str(court.pk),
+				"reason": "We were delayed but can still play.",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(match.no_show_reports.filter(status="pending").count(), 0)
+
+	def test_pending_no_show_auto_forfeits_after_deadline(self):
+		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		team_a = self._create_team(tournament, "Team A", username="team_a_auto", seed=1)
+		team_b = self._create_team(tournament, "Team B", username="team_b_auto", seed=2)
+		generate_fixtures(tournament)
+		match = tournament.matches.filter(status="upcoming").first()
+		match.scheduled_time = timezone.now() - timedelta(minutes=20)
+		match.scheduled_end_time = timezone.now() + timedelta(minutes=10)
+		match.save(update_fields=["scheduled_time", "scheduled_end_time"])
+
+		self.client.force_login(team_b.user)
+		self.client.post(
+			reverse("report_no_show", kwargs={"pk": match.pk}),
+			{"no_show_team": str(team_a.pk)},
+			follow=True,
+		)
+		report = match.no_show_reports.get()
+		report.deadline_at = timezone.now() - timedelta(minutes=1)
+		report.save(update_fields=["deadline_at"])
+
+		response = self.client.get(reverse("dashboard"))
+		self.assertEqual(response.status_code, 200)
+		match.refresh_from_db()
+		self.assertEqual(match.status, "forfeited")
+		self.assertEqual(match.winner, team_b)
 
 
 class TournamentLifecycleTests(TestCase):

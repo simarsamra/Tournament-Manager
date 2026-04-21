@@ -1,6 +1,7 @@
 from django import forms
 from django.contrib.auth.models import User
-from .models import Tournament, Court, Team, Match, RescheduleRequest, TimeSlot, Player, CourtAvailability
+from django.utils import timezone
+from .models import Tournament, Court, Team, Match, RescheduleRequest, TimeSlot, Player, CourtAvailability, OpenSlot
 
 
 class TournamentForm(forms.ModelForm):
@@ -39,6 +40,11 @@ class CourtForm(forms.ModelForm):
             "is_available": forms.CheckboxInput(attrs={"class": "form-check-input"}),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["is_available"].required = False
+        self.fields["is_available"].initial = True
+
 
 class TimeSlotForm(forms.Form):
     court = forms.ModelChoiceField(
@@ -56,24 +62,39 @@ class TimeSlotForm(forms.Form):
             self.fields["court"].queryset = Court.objects.filter(tournament=tournament, is_available=True)
 
 
-class CourtAvailabilityForm(forms.ModelForm):
-    class Meta:
-        model = CourtAvailability
-        fields = ["court", "weekday", "start_time", "end_time", "start_date", "end_date", "is_active"]
-        widgets = {
-            "court": forms.Select(attrs={"class": "form-select"}),
-            "weekday": forms.Select(attrs={"class": "form-select"}),
-            "start_time": forms.TimeInput(attrs={"class": "form-control", "type": "time"}),
-            "end_time": forms.TimeInput(attrs={"class": "form-control", "type": "time"}),
-            "start_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
-            "end_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
-            "is_active": forms.CheckboxInput(attrs={"class": "form-check-input"}),
-        }
+class CourtAvailabilityForm(forms.Form):
+    courts = forms.ModelMultipleChoiceField(
+        queryset=Court.objects.none(),
+        widget=forms.CheckboxSelectMultiple(),
+        error_messages={"required": "Select at least one court."},
+        help_text="Apply this schedule to one or more courts at once.",
+    )
+    weekdays = forms.MultipleChoiceField(
+        choices=CourtAvailability.WEEKDAY_CHOICES,
+        widget=forms.CheckboxSelectMultiple(),
+        error_messages={"required": "Select at least one weekday."},
+        help_text="Choose every day that should reuse this time range.",
+    )
+    start_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
+    end_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
+    start_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+    )
+    end_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+    )
+    is_active = forms.BooleanField(
+        required=False,
+        initial=True,
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
 
     def __init__(self, *args, tournament=None, **kwargs):
         super().__init__(*args, **kwargs)
         if tournament:
-            self.fields["court"].queryset = Court.objects.filter(tournament=tournament)
+            self.fields["courts"].queryset = Court.objects.filter(tournament=tournament).order_by("name")
 
     def clean(self):
         cleaned = super().clean()
@@ -117,14 +138,25 @@ class TeamRegistrationForm(forms.Form):
         widget=forms.CheckboxSelectMultiple(),
         help_text="Select at least one preferred court when options are available.",
     )
+    confirm_registration = forms.BooleanField(
+        required=True,
+        error_messages={
+            "required": "Please confirm that the team information is correct before registering.",
+        },
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
 
     def __init__(self, *args, tournament=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.tournament = tournament
         if tournament:
-            courts = Court.objects.filter(tournament=tournament, is_available=True)
+            courts = Court.objects.filter(tournament=tournament, is_available=True).order_by("name")
             self.fields["preferred_courts"].queryset = courts
             self.fields["preferred_courts"].required = courts.exists()
+            if courts.exists():
+                self.fields["preferred_courts"].help_text = "Select the courts your team prefers for scheduled matches."
+            else:
+                self.fields["preferred_courts"].help_text = "No courts are currently available for preference selection yet."
 
     def clean(self):
         cleaned = super().clean()
@@ -164,8 +196,20 @@ class ScoreSubmitForm(forms.Form):
 
 
 class RescheduleForm(forms.Form):
-    new_date = forms.DateField(widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}))
-    new_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
+    open_slot = forms.ModelChoiceField(
+        queryset=OpenSlot.objects.none(),
+        required=False,
+        empty_label=None,
+        widget=forms.RadioSelect(),
+    )
+    new_date = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+    )
+    new_time = forms.TimeField(
+        required=False,
+        widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}),
+    )
     new_court = forms.ModelChoiceField(
         queryset=Court.objects.none(),
         required=False,
@@ -178,10 +222,27 @@ class RescheduleForm(forms.Form):
 
     def __init__(self, *args, tournament=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["open_slot"].label_from_instance = lambda slot: (
+            f"{timezone.localtime(slot.start_time).strftime('%a, %b %d, %Y · %H:%M')} - "
+            f"{timezone.localtime(slot.end_time).strftime('%H:%M')} · {slot.court.name}"
+        )
         if tournament:
+            self.fields["open_slot"].queryset = OpenSlot.objects.filter(
+                tournament=tournament,
+                end_time__gt=timezone.now(),
+            ).select_related("court").order_by("start_time")
             self.fields["new_court"].queryset = Court.objects.filter(
                 tournament=tournament, is_available=True
             )
+
+    def clean(self):
+        cleaned = super().clean()
+        open_slot = cleaned.get("open_slot")
+        new_date = cleaned.get("new_date")
+        new_time = cleaned.get("new_time")
+        if not open_slot and (not new_date or not new_time):
+            raise forms.ValidationError("Choose an open slot or enter a new date and time.")
+        return cleaned
 
 
 class TeamPreferencesForm(forms.Form):
@@ -223,3 +284,26 @@ class BulkTeamFileForm(forms.Form):
         widget=forms.FileInput(attrs={"class": "form-control", "accept": ".csv,.txt"}),
         help_text="CSV/TXT file: team_name,username,password,player1;player2;... (one per line)"
     )
+
+
+class TeamMemberInviteForm(forms.Form):
+    username = forms.CharField(
+        max_length=150,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Username"}),
+    )
+    password = forms.CharField(
+        widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Password"}),
+    )
+    password_confirm = forms.CharField(
+        label="Confirm password",
+        widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Confirm Password"}),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("password") != cleaned.get("password_confirm"):
+            raise forms.ValidationError("Passwords do not match.")
+        username = cleaned.get("username", "").strip()
+        if username and User.objects.filter(username=username).exists():
+            raise forms.ValidationError("Username already taken.")
+        return cleaned
