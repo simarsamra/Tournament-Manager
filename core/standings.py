@@ -152,7 +152,7 @@ def check_group_stage_complete(tournament):
 
     # Group stage complete – generate knockout from top teams
     groups = set(
-        tournament.teams.filter(status="active").exclude(group="").values_list("group", flat=True)
+        tournament.teams.filter(status="active", group__gt="").values_list("group", flat=True)
     )
     advancing = []
     for group_name in sorted(groups):

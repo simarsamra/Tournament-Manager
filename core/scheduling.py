@@ -322,7 +322,11 @@ def generate_hybrid(tournament):
         for group_teams in groups.values()
     )
     if advancing_slots >= 2:
-        max_group_round = max((len(group_teams) - 1 for group_teams in groups.values() if len(group_teams) >= 2), default=0)
+        # Use the furthest group-stage round as the knockout round-number offset.
+        max_group_round = max(
+            (len(group_teams) - 1 for group_teams in groups.values() if len(group_teams) >= 2),
+            default=0,
+        )
         generate_knockout_placeholders(
             tournament,
             num_teams=advancing_slots,
