@@ -55,6 +55,12 @@
     </div>
 
     <div>
+        {% if match.tournament.status == 'completed' %}
+        <div class="alert alert-success" style="display:flex;align-items:center;gap:0.5rem;">
+            <span>✅</span>
+            <span>This tournament has been completed. Score entry is now closed.</span>
+        </div>
+        {% else %}
         {% if can_submit %}
         <div class="card">
             <div class="card-header">Submit Score</div>
@@ -136,6 +142,7 @@
             </div>
         </div>
         {% endif %}
+        {% endif %}{# end tournament not completed #}
 
         {% if can_report_no_show %}
         <div class="card">

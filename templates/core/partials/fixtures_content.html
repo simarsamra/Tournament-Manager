@@ -1,4 +1,13 @@
 {% if tournament %}
+{% if tournament.status == 'completed' %}
+<div class="alert alert-success" style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+    <span style="font-size:1.4rem;">✅</span>
+    <div>
+        <strong>Tournament Complete</strong>
+        {% if tournament.champion %} — Champion: <strong>{{ tournament.champion.name }}</strong>{% endif %}
+    </div>
+</div>
+{% endif %}
 <div class="card">
     <div class="table-container">
     <table>

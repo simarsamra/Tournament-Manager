@@ -170,3 +170,37 @@ def check_group_stage_complete(tournament):
         )
         return True
     return False
+
+
+def _determine_champion(tournament):
+    """Return the champion Team for a completed tournament, or None."""
+    fmt = tournament.format
+
+    if fmt in ("round_robin", "double_round_robin"):
+        standings = calculate_standings(tournament)
+        if standings:
+            return standings[0]["team"]
+        return None
+
+    # Bracket-based formats: winner of the winners-bracket final
+    # (the highest-round match with next_match=None and both teams set)
+    final = (
+        tournament.matches
+        .filter(bracket_type="winners", next_match__isnull=True,
+                team1__isnull=False, team2__isnull=False,
+                status="confirmed")
+        .order_by("-round_number")
+        .first()
+    )
+    if final and final.winner:
+        return final.winner
+
+    # Fallback: any confirmed match with no next match
+    final = (
+        tournament.matches
+        .filter(next_match__isnull=True, team1__isnull=False,
+                team2__isnull=False, status="confirmed")
+        .order_by("-round_number")
+        .first()
+    )
+    return final.winner if final else None
