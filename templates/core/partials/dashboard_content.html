@@ -15,19 +15,23 @@
     <div class="card-body">
         <div class="grid grid-4 mb-2">
             <div class="stat-card">
+                <div style="font-size:1.5rem;margin-bottom:0.25rem;">🏆</div>
                 <div class="stat-value">{{ all_tournaments|length }}</div>
                 <div class="stat-label">All Tournaments</div>
             </div>
             <div class="stat-card">
+                <div style="font-size:1.5rem;margin-bottom:0.25rem;">🟢</div>
                 <div class="stat-value" style="color:var(--success)">{{ active_tournaments_count|default:"0" }}</div>
                 <div class="stat-label">Active</div>
             </div>
             <div class="stat-card">
+                <div style="font-size:1.5rem;margin-bottom:0.25rem;">⏳</div>
                 <div class="stat-value" style="color:var(--warning)">{{ setup_tournaments_count|default:"0" }}</div>
                 <div class="stat-label">Pre-Live</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{{ completed_tournaments_count|default:"0" }}</div>
+                <div style="font-size:1.5rem;margin-bottom:0.25rem;">✅</div>
+                <div class="stat-value" style="color:var(--text-muted)">{{ completed_tournaments_count|default:"0" }}</div>
                 <div class="stat-label">Completed</div>
             </div>
         </div>
@@ -72,19 +76,23 @@
 {% if tournament %}
 <div class="grid grid-4 mb-2">
     <div class="stat-card">
+        <div style="font-size:1.5rem;margin-bottom:0.25rem;">👥</div>
         <div class="stat-value">{{ total_teams|default:"0" }}</div>
-        <div class="stat-label">Selected Teams</div>
+        <div class="stat-label">Teams</div>
     </div>
     <div class="stat-card">
+        <div style="font-size:1.5rem;margin-bottom:0.25rem;">📋</div>
         <div class="stat-value">{{ total_matches|default:"0" }}</div>
-        <div class="stat-label">Selected Matches</div>
+        <div class="stat-label">Matches</div>
     </div>
     <div class="stat-card">
-        <div class="stat-value">{{ confirmed_matches|default:"0" }}</div>
+        <div style="font-size:1.5rem;margin-bottom:0.25rem;">✅</div>
+        <div class="stat-value" style="color:var(--success)">{{ confirmed_matches|default:"0" }}</div>
         <div class="stat-label">Done</div>
     </div>
     <div class="stat-card">
-        <div class="stat-value">{{ disputed_matches|default:"0" }}</div>
+        <div style="font-size:1.5rem;margin-bottom:0.25rem;">⚠️</div>
+        <div class="stat-value" style="color:var(--danger)">{{ disputed_matches|default:"0" }}</div>
         <div class="stat-label">Disputed</div>
     </div>
 </div>
@@ -103,56 +111,70 @@
 
 {# --- Performance Summary Bar --- #}
 <div class="card mb-2">
-    <div class="card-body" style="padding:1rem 1.25rem;">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
-            <div>
-                <div style="font-size:1rem;font-weight:700;color:var(--text);">{{ team.name }}</div>
-                <div style="font-size:0.8rem;color:var(--text-muted);">{{ tournament.name }} &middot; {{ tournament.get_format_display }}</div>
+    <div class="card-body" style="padding:1.25rem 1.5rem;">
+        <div class="perf-bar-outer" style="display:flex;align-items:stretch;gap:0;flex-wrap:wrap;">
+
+            {# Team name + tournament #}
+            <div style="min-width:160px;padding-right:1.5rem;margin-right:1.5rem;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;">
+                <div style="font-size:1.15rem;font-weight:700;color:var(--text);line-height:1.2;">{{ team.name }}</div>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-top:0.25rem;">{{ tournament.name }}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted);">{{ tournament.get_format_display }}</div>
             </div>
-            <div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;">
+
+            {# Stats row #}
+            <div class="perf-stats" style="display:flex;gap:0;flex-wrap:wrap;align-items:stretch;flex:1;">
+
                 {% if team_standing %}
-                <div style="text-align:center;">
-                    <div style="font-size:1.4rem;font-weight:700;color:var(--primary);">#{{ team_standing.rank }}</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Rank</div>
+                <div style="text-align:center;padding:0 1.5rem;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;">
+                    <div style="font-size:2rem;font-weight:800;color:var(--primary);line-height:1;">#{{ team_standing.rank }}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-top:0.3rem;">Rank</div>
                 </div>
-                <div style="text-align:center;">
-                    <div style="font-size:1.4rem;font-weight:700;color:var(--primary);">{{ team_standing.points }}</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Points</div>
+                <div style="text-align:center;padding:0 1.5rem;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;">
+                    <div style="font-size:2rem;font-weight:800;color:var(--primary);line-height:1;">{{ team_standing.points }}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-top:0.3rem;">Points</div>
                 </div>
                 {% endif %}
+
                 {% if team_record.played %}
-                <div style="text-align:center;">
-                    <div style="font-size:1rem;font-weight:600;line-height:1.4;">
+                <div style="text-align:center;padding:0 1.5rem;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;">
+                    <div style="font-size:1.3rem;font-weight:700;line-height:1;">
                         <span style="color:var(--success);">{{ team_record.wins }}W</span>
-                        <span style="color:var(--text-muted);margin:0 2px;">&middot;</span>
+                        <span style="color:var(--text-muted);margin:0 3px;font-weight:400;">/</span>
                         <span style="color:var(--danger);">{{ team_record.losses }}L</span>
-                        {% if team_record.draws %}<span style="color:var(--text-muted);margin:0 2px;">&middot;</span><span>{{ team_record.draws }}D</span>{% endif %}
+                        {% if team_record.draws %}
+                        <span style="color:var(--text-muted);margin:0 3px;font-weight:400;">/</span>
+                        <span style="color:var(--text-muted);">{{ team_record.draws }}D</span>
+                        {% endif %}
                     </div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Record</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-top:0.3rem;">W / L{% if team_record.draws %} / D{% endif %}</div>
                 </div>
+
                 {% if team_standing %}
-                <div style="text-align:center;">
-                    <div style="font-size:1.4rem;font-weight:700;{% if team_standing.game_diff > 0 %}color:var(--success){% elif team_standing.game_diff < 0 %}color:var(--danger){% endif %};">
+                <div style="text-align:center;padding:0 1.5rem;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:center;">
+                    <div style="font-size:2rem;font-weight:800;line-height:1;{% if team_standing.game_diff > 0 %}color:var(--success){% elif team_standing.game_diff < 0 %}color:var(--danger){% else %}color:var(--text){% endif %};">
                         {% if team_standing.game_diff > 0 %}+{% endif %}{{ team_standing.game_diff }}
                     </div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Game Diff</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-top:0.3rem;">Game Diff</div>
                 </div>
                 {% endif %}
-                <div style="text-align:center;">
-                    <div style="font-size:1.4rem;font-weight:700;">{{ team_record.win_rate }}%</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;">Win Rate</div>
+
+                <div style="text-align:center;padding:0 1.5rem;{% if form_strip %}border-right:1px solid var(--border);{% endif %}display:flex;flex-direction:column;justify-content:center;">
+                    <div style="font-size:2rem;font-weight:800;color:var(--text);line-height:1;">{{ team_record.win_rate }}%</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-top:0.3rem;">Win Rate</div>
                 </div>
                 {% endif %}
+
                 {% if form_strip %}
-                <div>
-                    <div style="display:flex;gap:4px;margin-bottom:2px;">
+                <div style="padding:0 1.5rem;display:flex;flex-direction:column;justify-content:center;">
+                    <div style="display:flex;gap:5px;margin-bottom:0.3rem;">
                         {% for r in form_strip %}
-                        <span style="width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700;{% if r == 'W' %}background:#d1fae5;color:#065f46;{% elif r == 'L' %}background:#fecaca;color:#991b1b;{% else %}background:#e2e8f0;color:#475569;{% endif %}">{{ r }}</span>
+                        <span style="width:30px;height:30px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;{% if r == 'W' %}background:#d1fae5;color:#065f46;{% elif r == 'L' %}background:#fecaca;color:#991b1b;{% else %}background:#e2e8f0;color:#475569;{% endif %}">{{ r }}</span>
                         {% endfor %}
                     </div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);text-transform:uppercase;text-align:center;">Form</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;text-align:center;">Form</div>
                 </div>
                 {% endif %}
+
             </div>
         </div>
     </div>
@@ -200,13 +222,13 @@
     </div>
 </div>
 
-<div class="card">
+<div class="card card-warning">
     <div class="card-header">&#9888;&#65039; Pending Actions</div>
     <div class="card-body">
         {% if pending_matches %}
         <h4 class="mb-1">Scores to Confirm</h4>
         {% for m in pending_matches %}
-        <div class="d-flex justify-between align-center mb-1" style="padding:0.5rem;background:#fef3c7;border-radius:6px;">
+        <div class="alert alert-warning d-flex justify-between align-center mb-1">
             <span>Match #{{ m.match_number }}: {{ m.score_team1 }} - {{ m.score_team2 }}</span>
             <a href="{% url 'match_detail' pk=m.pk %}" class="btn btn-warning btn-sm">Review</a>
         </div>
@@ -216,7 +238,7 @@
         {% if pending_reschedules %}
         <h4 class="mb-1 mt-1">Reschedule Requests</h4>
         {% for rr in pending_reschedules %}
-        <div class="d-flex justify-between align-center mb-1" style="padding:0.5rem;background:#dbeafe;border-radius:6px;">
+        <div class="alert alert-info d-flex justify-between align-center mb-1">
             <span>Match #{{ rr.match.match_number }} &rarr; {{ rr.new_time|date:"M d, H:i" }}</span>
             <a href="{% url 'match_detail' pk=rr.match.pk %}" class="btn btn-primary btn-sm">Review</a>
         </div>
@@ -226,7 +248,7 @@
         {% if pending_no_show_reports %}
         <h4 class="mb-1 mt-1">No-show notice</h4>
         {% for report in pending_no_show_reports %}
-        <div class="d-flex justify-between align-center mb-1" style="padding:0.5rem;background:#fee2e2;border-radius:6px;gap:0.5rem;">
+        <div class="alert alert-error d-flex justify-between align-center mb-1" style="gap:0.5rem;">
             <span>
                 {% if report.absent_team == team %}
                     Your team was reported absent for Match #{{ report.match.match_number }}. Request a reschedule before {{ report.deadline_at|date:"M d, H:i" }}.
