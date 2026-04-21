@@ -50,6 +50,8 @@ urlpatterns = [
     path("team/<int:pk>/preferences/", views.team_preferences, name="team_preferences"),
     path("team/<int:pk>/members/add/", views.manage_team_members, name="manage_team_members"),
     path("team/<int:pk>/members/<int:user_pk>/remove/", views.remove_team_member, name="remove_team_member"),
+    path("team/<int:pk>/members/<int:user_pk>/reset-password/", views.reset_member_password, name="reset_member_password"),
+    path("team/<int:pk>/captain/reset-password/", views.reset_captain_password, name="reset_captain_password"),
 
     # Standings
     path("standings/", views.standings_view, name="standings"),

@@ -248,7 +248,7 @@ def _create_open_slot_for_completed_match(match, reason):
     if slot_end <= now:
         return None
 
-    slot_start = match.scheduled_time if match.scheduled_time > now else now
+    slot_start = match.scheduled_time
     if slot_end <= slot_start:
         return None
 
@@ -450,6 +450,7 @@ def dashboard_view(request):
         "tournament": tournament,
         "team": team,
         "is_organizer": is_organizer,
+        "is_captain": _is_captain(request.user, team),
     }
     if tournament and team:
         team_matches_qs = Match.objects.filter(
@@ -1438,13 +1439,18 @@ def team_detail(request, pk):
     is_organizer = _is_organizer(request.user)
     is_own_team = _get_team(request.user) == team
     is_captain = _is_captain(request.user, team)
+    memberships = team.memberships.select_related("user").order_by("role", "joined_at")
+    max_members = tournament.players_per_team if tournament else None
+    members_full = max_members is not None and memberships.count() >= max_members
     return render(request, "core/team_detail.html", {
         "team": team, "tournament": tournament, "matches": matches, "stats": stats,
         "players": team.players.all(),
         "is_organizer": is_organizer,
         "is_own_team": is_own_team,
         "is_captain": is_captain,
-        "memberships": team.memberships.select_related("user").order_by("role", "joined_at"),
+        "memberships": memberships,
+        "members_full": members_full,
+        "max_members": max_members,
         "invite_form": TeamMemberInviteForm() if (is_captain or is_organizer) else None,
         **_tournament_context(request, tournament),
     })
@@ -1457,6 +1463,10 @@ def manage_team_members(request, pk):
     is_organizer = _is_organizer(request.user)
     if not is_organizer and (user_team != team or not _is_captain(request.user, user_team)):
         messages.error(request, "Only the team captain can manage members.")
+        return redirect("team_detail", pk=pk)
+    max_members = team.tournament.players_per_team if team.tournament else None
+    if max_members is not None and team.memberships.count() >= max_members:
+        messages.error(request, f"Team is already at the maximum of {max_members} member(s).")
         return redirect("team_detail", pk=pk)
     if request.method == "POST":
         form = TeamMemberInviteForm(request.POST)
@@ -1479,6 +1489,74 @@ def manage_team_members(request, pk):
             for field in form:
                 for error in field.errors:
                     messages.error(request, f"{field.label}: {error}")
+    return redirect("team_detail", pk=pk)
+
+
+@login_required
+@require_POST
+def reset_member_password(request, pk, user_pk):
+    team = get_object_or_404(Team, pk=pk)
+    user_team = _get_team(request.user)
+    is_organizer = _is_organizer(request.user)
+    if not is_organizer and (user_team != team or not _is_captain(request.user, user_team)):
+        messages.error(request, "Only the team captain can reset member passwords.")
+        return redirect("team_detail", pk=pk)
+    membership = get_object_or_404(TeamMembership, team=team, user_id=user_pk)
+    if membership.role == "captain":
+        messages.error(request, "Cannot reset the captain's password this way.")
+        return redirect("team_detail", pk=pk)
+    new_password = request.POST.get("new_password", "").strip()
+    confirm_password = request.POST.get("confirm_password", "").strip()
+    if not new_password:
+        messages.error(request, "New password cannot be empty.")
+        return redirect("team_detail", pk=pk)
+    if new_password != confirm_password:
+        messages.error(request, "Passwords do not match.")
+        return redirect("team_detail", pk=pk)
+    if len(new_password) < 6:
+        messages.error(request, "Password must be at least 6 characters.")
+        return redirect("team_detail", pk=pk)
+    member_user = membership.user
+    member_user.set_password(new_password)
+    member_user.save()
+    log_action(
+        request,
+        "member_password_reset",
+        f"Password reset for member '{member_user.username}' in team '{team.name}'",
+        tournament=team.tournament,
+    )
+    messages.success(request, f"Password for '{member_user.username}' has been reset.")
+    return redirect("team_detail", pk=pk)
+
+
+@login_required
+@require_POST
+def reset_captain_password(request, pk):
+    team = get_object_or_404(Team, pk=pk)
+    if not _is_organizer(request.user):
+        messages.error(request, "Only the organizer can reset a captain's password.")
+        return redirect("team_detail", pk=pk)
+    new_password = request.POST.get("new_password", "").strip()
+    confirm_password = request.POST.get("confirm_password", "").strip()
+    if not new_password:
+        messages.error(request, "New password cannot be empty.")
+        return redirect("team_detail", pk=pk)
+    if new_password != confirm_password:
+        messages.error(request, "Passwords do not match.")
+        return redirect("team_detail", pk=pk)
+    if len(new_password) < 6:
+        messages.error(request, "Password must be at least 6 characters.")
+        return redirect("team_detail", pk=pk)
+    captain_user = team.user
+    captain_user.set_password(new_password)
+    captain_user.save()
+    log_action(
+        request,
+        "captain_password_reset",
+        f"Password reset for captain '{captain_user.username}' of team '{team.name}'",
+        tournament=team.tournament,
+    )
+    messages.success(request, f"Password for captain '{captain_user.username}' has been reset.")
     return redirect("team_detail", pk=pk)
 
 

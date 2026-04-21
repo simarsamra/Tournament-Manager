@@ -23,7 +23,30 @@
 
 <div class="card mb-2">
     <div class="card-body">
-        <strong>Captain account:</strong> {{ team.user.username }}
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">
+            <span><strong>Captain account:</strong> {{ team.user.username }}</span>
+            {% if is_organizer %}
+            <div>
+                <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('reset-captain-pw').style.display=document.getElementById('reset-captain-pw').style.display==='none'?'block':'none'">Reset Captain Password</button>
+                <div id="reset-captain-pw" style="display:none;margin-top:0.6rem;padding:0.6rem;background:#f8fafc;border:1px solid var(--border);border-radius:6px;">
+                    <form method="post" action="{% url 'reset_captain_password' pk=team.pk %}">
+                        {% csrf_token %}
+                        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;">
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label style="font-size:0.8rem;">New Password</label>
+                                <input type="password" name="new_password" class="form-control" placeholder="Min 6 characters" required minlength="6" style="font-size:0.8rem;">
+                            </div>
+                            <div class="form-group" style="margin-bottom:0;">
+                                <label style="font-size:0.8rem;">Confirm Password</label>
+                                <input type="password" name="confirm_password" class="form-control" placeholder="Repeat password" required minlength="6" style="font-size:0.8rem;">
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm">Set Password</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
+        </div>
     </div>
 </div>
 
@@ -31,7 +54,7 @@
 <div class="card mb-2">
     <div class="card-header">
         Team Members
-        <span class="badge badge-active" style="margin-left:0.4rem;">{{ memberships|length }}</span>
+        <span class="badge badge-active" style="margin-left:0.4rem;">{{ memberships|length }}{% if max_members %} / {{ max_members }}{% endif %}</span>
     </div>
     <div class="card-body" style="padding:0;">
         <div class="table-container">
@@ -48,10 +71,23 @@
                 {% if is_captain or is_organizer %}
                 <td>
                     {% if m.role != 'captain' %}
-                    <form method="post" action="{% url 'remove_team_member' pk=team.pk user_pk=m.user.pk %}" style="display:inline;">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Remove {{ m.user.username }} from the team? Their account will be deleted.')">Remove</button>
-                    </form>
+                    <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;">
+                        <form method="post" action="{% url 'remove_team_member' pk=team.pk user_pk=m.user.pk %}" style="display:inline;">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Remove {{ m.user.username }} from the team? Their account will be deleted.')">Remove</button>
+                        </form>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('reset-pw-{{ m.user.pk }}').style.display=document.getElementById('reset-pw-{{ m.user.pk }}').style.display==='none'?'block':'none'">Reset PW</button>
+                    </div>
+                    <div id="reset-pw-{{ m.user.pk }}" style="display:none;margin-top:0.5rem;padding:0.6rem;background:#f8fafc;border:1px solid var(--border);border-radius:6px;min-width:260px;">
+                        <form method="post" action="{% url 'reset_member_password' pk=team.pk user_pk=m.user.pk %}">
+                            {% csrf_token %}
+                            <div style="display:flex;flex-direction:column;gap:0.4rem;">
+                                <input type="password" name="new_password" class="form-control" placeholder="New password" required minlength="6" style="font-size:0.8rem;">
+                                <input type="password" name="confirm_password" class="form-control" placeholder="Confirm password" required minlength="6" style="font-size:0.8rem;">
+                                <button type="submit" class="btn btn-primary btn-sm">Set Password</button>
+                            </div>
+                        </form>
+                    </div>
                     {% else %}
                     <span class="text-muted" style="font-size:0.8rem;">Captain</span>
                     {% endif %}
@@ -64,7 +100,10 @@
         </div>
     </div>
     {% if invite_form %}
-    <div style="padding:1rem;border-top:1px solid var(--border);">
+    <div style="padding:1rem;border-top:1px solid var(--border);{% if members_full %}opacity:0.5;pointer-events:none;{% endif %}">
+        {% if members_full %}
+        <p style="margin:0 0 0.5rem;color:var(--text-muted);font-size:0.85rem;">&#128274; Team is at full capacity ({{ max_members }} member{{ max_members|pluralize }}).</p>
+        {% endif %}
         <h4 style="margin-bottom:0.75rem;font-size:0.9rem;">Add Member Account</h4>
         <form method="post" action="{% url 'manage_team_members' pk=team.pk %}">
             {% csrf_token %}
@@ -82,7 +121,7 @@
                     {{ invite_form.password_confirm }}
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">Add Member</button>
+            <button type="submit" class="btn btn-primary btn-sm" {% if members_full %}disabled{% endif %}>Add Member</button>
         </form>
     </div>
     {% endif %}

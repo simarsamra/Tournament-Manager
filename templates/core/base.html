@@ -26,6 +26,10 @@
             <div class="sidebar-section">Actions</div>
             <a href="{% url 'rescheduling' %}" class="{% if request.resolver_match.url_name == 'rescheduling' %}active{% endif %}">🔄 Rescheduling</a>
             <a href="{% url 'open_slots' %}" class="{% if request.resolver_match.url_name == 'open_slots' %}active{% endif %}">📅 Open Slots</a>
+            {% if team %}
+            <div class="sidebar-section">My Team</div>
+            <a href="{% url 'team_detail' pk=team.pk %}" class="{% if request.resolver_match.url_name == 'team_detail' %}active{% endif %}">🏅 {{ team.name }}</a>
+            {% endif %}
             {% if user.is_staff %}
             <div class="sidebar-section">Admin</div>
             <a href="{% url 'tournament_setup' %}" class="{% if request.resolver_match.url_name == 'tournament_setup' %}active{% endif %}">⚙️ New Tournament</a>
@@ -57,7 +61,7 @@
                 </form>
                 {% endif %}
                 {% if team %}
-                <span class="text-muted">Team: <strong>{{ team.name }}</strong></span>
+                <span class="text-muted">Team: <a href="{% url 'team_detail' pk=team.pk %}" style="color:inherit;font-weight:700;text-decoration:none;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">{{ team.name }}</a></span>
                 {% elif user.is_staff %}
                 <span class="text-muted">Organizer: <strong>{{ user.username }}</strong></span>
                 {% endif %}

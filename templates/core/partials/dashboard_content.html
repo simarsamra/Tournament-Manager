@@ -158,6 +158,18 @@
     </div>
 </div>
 
+{# --- Captain Quick Actions --- #}
+{% if is_captain %}
+<div class="card mb-2">
+    <div class="card-header">Team Management</div>
+    <div class="card-body" style="display:flex;gap:0.5rem;flex-wrap:wrap;padding:0.75rem 1rem;">
+        <a href="{% url 'team_detail' pk=team.pk %}" class="btn btn-outline btn-sm">&#128101; View Team</a>
+        <a href="{% url 'team_detail' pk=team.pk %}#members" class="btn btn-primary btn-sm">&#43; Add / Manage Members</a>
+        <a href="{% url 'team_preferences' pk=team.pk %}" class="btn btn-outline btn-sm">&#9881;&#65039; Preferences</a>
+    </div>
+</div>
+{% endif %}
+
 {# --- Row 1: Next Match Intelligence + Pending Actions --- #}
 <div class="grid grid-2">
 
