@@ -441,27 +441,180 @@ def dashboard_view(request):
         "is_organizer": is_organizer,
     }
     if tournament and team:
-        team_matches = Match.objects.filter(
+        team_matches_qs = Match.objects.filter(
             tournament=tournament
-        ).filter(Q(team1=team) | Q(team2=team)).order_by("scheduled_time", "match_number")
-        context["upcoming_matches"] = team_matches.filter(
-            status__in=["upcoming", "in_progress"]
-        )[:5]
-        context["pending_matches"] = team_matches.filter(
+        ).filter(Q(team1=team) | Q(team2=team))
+
+        # Full upcoming schedule (no cap) — split into first-5 and rest for template toggle
+        all_upcoming = list(
+            team_matches_qs.filter(
+                status__in=["upcoming", "in_progress"]
+            ).select_related("team1", "team2", "court").order_by("scheduled_time", "match_number")
+        )
+        context["upcoming_matches"] = all_upcoming[:5]
+        context["remaining_upcoming"] = all_upcoming[5:]
+        context["remaining_matches_count"] = len(all_upcoming)
+
+        context["pending_matches"] = team_matches_qs.filter(
             status="pending_confirmation"
         ).exclude(submitted_by=team)
-        context["recent_matches"] = team_matches.filter(
+
+        # Completed matches in chronological order (for trajectory)
+        completed_chrono = list(
+            team_matches_qs.filter(
+                status__in=["confirmed", "forfeited"]
+            ).select_related("team1", "team2", "winner", "court").order_by("match_number")
+        )
+
+        # Recent results: last 5, most recent first (for display)
+        context["recent_matches"] = team_matches_qs.filter(
             status__in=["confirmed", "forfeited"]
-        ).order_by("-updated_at")[:5]
+        ).select_related("team1", "team2", "winner").order_by("-updated_at")[:5]
+
         context["pending_reschedules"] = RescheduleRequest.objects.filter(
-            match__in=team_matches, status="pending",
+            match__in=team_matches_qs, status="pending",
         ).exclude(requested_by=team)
         context["pending_no_show_reports"] = NoShowReport.objects.filter(
-            match__in=team_matches,
+            match__in=team_matches_qs,
             status="pending",
         ).filter(Q(absent_team=team) | Q(present_team=team)).select_related(
             "match", "absent_team", "present_team"
         )
+
+        # --- Team Analytics ---
+
+        # 1. Standings (round-robin / group stage formats only)
+        standings = []
+        team_standing = None
+        if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
+            standings = calculate_standings(tournament)
+            team_standing = next((s for s in standings if s["team"].pk == team.pk), None)
+        context["team_standing"] = team_standing
+
+        # Nearby standings rows: up to 2 above + self + 2 below
+        if standings and team_standing:
+            team_rank_idx = next(
+                (i for i, s in enumerate(standings) if s["team"].pk == team.pk), None
+            )
+            if team_rank_idx is not None:
+                start = max(0, team_rank_idx - 2)
+                end = min(len(standings), team_rank_idx + 3)
+                context["standings_nearby"] = [
+                    (s, s["team"].pk == team.pk) for s in standings[start:end]
+                ]
+
+        # 2. Win/loss summary (all formats)
+        wins = sum(1 for m in completed_chrono if m.winner_id == team.pk)
+        losses = sum(
+            1 for m in completed_chrono
+            if m.winner_id is not None and m.winner_id != team.pk
+        )
+        draws = len(completed_chrono) - wins - losses
+        played = len(completed_chrono)
+        context["team_record"] = {
+            "played": played,
+            "wins": wins,
+            "losses": losses,
+            "draws": draws,
+            "win_rate": round(wins / played * 100) if played else 0,
+        }
+
+        # 3. Form strip: last 5 results, most recent first
+        form_strip = []
+        for m in completed_chrono[-5:][::-1]:
+            if m.winner_id == team.pk:
+                form_strip.append("W")
+            elif m.winner_id is not None:
+                form_strip.append("L")
+            else:
+                form_strip.append("D")
+        context["form_strip"] = form_strip
+
+        # 4. Points trajectory
+        running_points = 0
+        trajectory = []
+        for m in completed_chrono:
+            opponent = m.get_opponent(team)
+            if m.winner_id == team.pk:
+                pts_earned = tournament.points_per_win
+                result = "W"
+            elif m.winner_id is not None:
+                pts_earned = tournament.points_per_loss
+                result = "L"
+            else:
+                pts_earned = tournament.points_per_draw
+                result = "D"
+            running_points += pts_earned
+            if m.score_team1 is not None and m.score_team2 is not None:
+                score = (
+                    f"{m.score_team1}–{m.score_team2}"
+                    if m.team1_id == team.pk
+                    else f"{m.score_team2}–{m.score_team1}"
+                )
+            else:
+                score = "–"
+            trajectory.append({
+                "match_number": m.match_number,
+                "opponent": opponent.name if opponent else "TBD",
+                "result": result,
+                "score": score,
+                "pts_earned": pts_earned,
+                "cumulative_points": running_points,
+            })
+        context["points_trajectory"] = trajectory
+
+        # 5. Next opponent intelligence
+        next_match = all_upcoming[0] if all_upcoming else None
+        context["next_match"] = next_match
+        next_opponent = None
+        next_opponent_standing = None
+        h2h = {"wins": 0, "losses": 0, "draws": 0}
+        if next_match:
+            next_opponent = next_match.get_opponent(team)
+            if next_opponent and standings:
+                next_opponent_standing = next(
+                    (s for s in standings if s["team"].pk == next_opponent.pk), None
+                )
+            if next_opponent:
+                for m in completed_chrono:
+                    opp = m.get_opponent(team)
+                    if opp and opp.pk == next_opponent.pk:
+                        if m.winner_id == team.pk:
+                            h2h["wins"] += 1
+                        elif m.winner_id is not None:
+                            h2h["losses"] += 1
+                        else:
+                            h2h["draws"] += 1
+        context["next_opponent"] = next_opponent
+        context["next_opponent_standing"] = next_opponent_standing
+        context["h2h"] = h2h
+
+        # 6. Qualification / points gap to first place
+        if team_standing and standings:
+            leader_pts = standings[0]["points"]
+            team_pts = team_standing["points"]
+            max_possible = team_pts + len(all_upcoming) * tournament.points_per_win
+            context["points_gap_to_first"] = leader_pts - team_pts
+            context["max_possible_points"] = max_possible
+            context["can_reach_first"] = (
+                team_standing["rank"] == 1 or max_possible >= leader_pts
+            )
+
+        # 7. Court preference match rate
+        preferred_court_ids = set(team.preferred_courts.values_list("id", flat=True))
+        if preferred_court_ids:
+            scheduled_matches = [
+                m for m in (all_upcoming + completed_chrono) if m.court_id is not None
+            ]
+            total_scheduled = len(scheduled_matches)
+            preferred_count = sum(
+                1 for m in scheduled_matches if m.court_id in preferred_court_ids
+            )
+            context["court_pref_total"] = total_scheduled
+            context["court_pref_matched"] = preferred_count
+            context["court_pref_rate"] = (
+                round(preferred_count / total_scheduled * 100) if total_scheduled else None
+            )
     if is_organizer:
         all_tournaments = _get_available_tournaments()
         context["all_tournaments"] = all_tournaments
