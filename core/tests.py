@@ -325,6 +325,7 @@ class UXAndLogicRegressionTests(TestCase):
 			{
 				"team_name": "Joiners",
 				"username": "joiners_user",
+				"department": "Engineering",
 				"password": "abc12345",
 				"password_confirm": "abc12345",
 				"player_names": "Alice",
@@ -337,6 +338,10 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertTrue(Team.objects.filter(tournament=open_tournament, name="Joiners").exists())
 		self.assertFalse(Team.objects.filter(tournament=other_tournament, name="Joiners").exists())
+		self.assertEqual(
+			Team.objects.get(tournament=open_tournament, name="Joiners").department,
+			"Engineering",
+		)
 
 	def test_organizer_generates_schedule_draft_then_publishes_tournament(self):
 		tournament = self._create_tournament(name="Draft Flow")
@@ -2293,4 +2298,3 @@ class TournamentCompletionTests(TestCase):
 
 		champion = _determine_champion(t)
 		self.assertEqual(champion, final.winner)
-

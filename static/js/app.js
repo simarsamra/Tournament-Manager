@@ -75,12 +75,14 @@ document.addEventListener('DOMContentLoaded', function() {
     if (registrationForm) {
         const teamInput = registrationForm.querySelector('[name="team_name"]');
         const usernameInput = registrationForm.querySelector('[name="username"]');
+        const departmentInput = registrationForm.querySelector('[name="department"]');
         const playersInput = registrationForm.querySelector('[name="player_names"]');
         const preferredInputs = registrationForm.querySelectorAll('[name="preferred_courts"]');
 
         const updateRegistrationPreview = function() {
             const teamTarget = document.querySelector('[data-preview="team_name"]');
             const usernameTarget = document.querySelector('[data-preview="username"]');
+            const departmentTarget = document.querySelector('[data-preview="department"]');
             const playerCountTarget = document.querySelector('[data-preview="player_count"]');
             const courtsTarget = document.querySelector('[data-preview="preferred_courts"]');
 
@@ -89,6 +91,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             if (usernameTarget) {
                 usernameTarget.textContent = usernameInput && usernameInput.value.trim() ? usernameInput.value.trim() : '-';
+            }
+            if (departmentTarget) {
+                departmentTarget.textContent = departmentInput && departmentInput.value.trim() ? departmentInput.value.trim() : '-';
             }
             if (playerCountTarget) {
                 const players = playersInput && playersInput.value
@@ -107,7 +112,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         };
 
-        [teamInput, usernameInput, playersInput].forEach(function(input) {
+        [teamInput, usernameInput, departmentInput, playersInput].forEach(function(input) {
             if (input) {
                 input.addEventListener('input', updateRegistrationPreview);
             }

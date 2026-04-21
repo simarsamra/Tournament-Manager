@@ -118,6 +118,11 @@ class TeamRegistrationForm(forms.Form):
         max_length=150,
         widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Username"})
     )
+    department = forms.CharField(
+        max_length=120,
+        required=False,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Department (optional)"})
+    )
     password = forms.CharField(
         widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Password"})
     )

@@ -476,6 +476,7 @@ def register_view(request, pk=None):
                 user=user,
                 tournament=tournament,
                 name=team_name,
+                department=form.cleaned_data.get("department", "").strip(),
             )
             TeamMembership.objects.create(team=team, user=user, role="captain")
             team.preferred_courts.set(form.cleaned_data.get("preferred_courts", []))
