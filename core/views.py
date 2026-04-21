@@ -61,34 +61,55 @@ def _get_available_tournaments():
 def _get_tournament(request=None):
     tournaments = Tournament.objects.all()
     if request and getattr(request, "user", None) and request.user.is_authenticated:
-        team = _get_team(request.user)
-        if team:
-            return team.tournament
         if _is_organizer(request.user):
             selected_id = request.GET.get("tournament") or request.session.get("selected_tournament_id")
             if selected_id and tournaments.filter(pk=selected_id).exists():
                 selected = tournaments.get(pk=selected_id)
                 request.session["selected_tournament_id"] = selected.pk
                 return selected
-    fallback = _get_available_tournaments().first()
-    if (
-        fallback
-        and request
-        and getattr(request, "user", None)
-        and request.user.is_authenticated
-        and _is_organizer(request.user)
-    ):
-        request.session["selected_tournament_id"] = fallback.pk
-    return fallback
+            fallback = _get_available_tournaments().first()
+            if fallback:
+                request.session["selected_tournament_id"] = fallback.pk
+            return fallback
+        else:
+            # Non-organiser: honour session selection if they have a membership there
+            selected_id = request.session.get("selected_tournament_id")
+            if selected_id:
+                has_membership = request.user.memberships.filter(
+                    team__tournament_id=selected_id
+                ).exists()
+                if has_membership:
+                    t = tournaments.filter(pk=selected_id).first()
+                    if t:
+                        return t
+            # Fall back to the user's first team's tournament
+            team = _get_team(request.user)
+            if team:
+                return team.tournament
+    return _get_available_tournaments().first()
 
 
 def _tournament_context(request, tournament=None):
-    if not request.user.is_authenticated or not _is_organizer(request.user):
+    if not request.user.is_authenticated:
         return {}
-    return {
-        "available_tournaments": _get_available_tournaments(),
-        "selected_tournament": tournament,
-    }
+    if _is_organizer(request.user):
+        return {
+            "available_tournaments": _get_available_tournaments(),
+            "selected_tournament": tournament,
+        }
+    # Non-organiser: supply switcher data when enrolled in multiple tournaments
+    user_tournament_ids = list(
+        request.user.memberships.values_list("team__tournament_id", flat=True).distinct()
+    )
+    if len(user_tournament_ids) > 1:
+        user_tournaments = list(
+            Tournament.objects.filter(pk__in=user_tournament_ids).order_by("-created_at")
+        )
+        return {
+            "user_tournaments": user_tournaments,
+            "selected_tournament": tournament,
+        }
+    return {}
 
 
 def _get_team(user, tournament=None):
@@ -621,7 +642,7 @@ def dashboard_view(request):
     tournament = _get_tournament(request)
     if tournament:
         _expire_no_show_reports(tournament)
-    team = _get_team(request.user)
+    team = _get_team(request.user, tournament=tournament)
     is_organizer = _is_organizer(request.user)
 
     # Non-organiser with no team yet → send to join list
@@ -811,6 +832,17 @@ def dashboard_view(request):
             context["court_pref_rate"] = (
                 round(preferred_count / total_scheduled * 100) if total_scheduled else None
             )
+    # Pre-tournament registration context for team members
+    if tournament and team and tournament.status not in ("active", "completed"):
+        member_count = team.memberships.count()
+        context["team_member_count"] = member_count
+        context["players_needed"] = max(0, tournament.players_per_team - member_count)
+        context["is_team_full"] = member_count >= tournament.players_per_team
+        context["registered_teams_count"] = tournament.teams.count()
+        context["team_members"] = list(
+            team.memberships.select_related("user").order_by("role", "joined_at")
+        )
+
     if is_organizer:
         all_tournaments = _get_available_tournaments()
         context["all_tournaments"] = all_tournaments
@@ -1193,16 +1225,19 @@ def complete_tournament(request, pk):
 @login_required
 @require_POST
 def select_tournament(request):
-    if not _is_organizer(request.user):
-        messages.error(request, "Only organizers can switch tournaments.")
-        return redirect("dashboard")
-
     tournament_id = request.POST.get("tournament_id")
     next_url = request.POST.get("next") or "dashboard"
     tournament = Tournament.objects.filter(pk=tournament_id).first()
     if not tournament:
         messages.error(request, "Tournament not found.")
         return redirect(next_url)
+
+    if not _is_organizer(request.user):
+        # Non-organisers can only switch to tournaments they're enrolled in
+        enrolled = request.user.memberships.filter(team__tournament=tournament).exists()
+        if not enrolled:
+            messages.error(request, "You are not enrolled in that tournament.")
+            return redirect(next_url)
 
     request.session["selected_tournament_id"] = tournament.pk
     messages.success(request, f"Now viewing '{tournament.name}'.")

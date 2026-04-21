@@ -116,6 +116,8 @@
 
 {% if team %}
 
+{% if tournament.status == 'active' or tournament.status == 'completed' %}
+
 {# --- Performance Summary Bar --- #}
 <div class="card mb-2">
     <div class="card-body" style="padding:1.25rem 1.5rem;">
@@ -488,6 +490,146 @@
     </div>
 </div>
 {% endif %}
+
+{% else %}{# --- pre-tournament registration phase --- #}
+
+{# Status banner #}
+<div class="alert alert-info mb-2" style="display:flex;align-items:center;gap:0.75rem;font-size:0.95rem;">
+    <span style="font-size:1.4rem;">📋</span>
+    <div>
+        <strong>{{ tournament.name }}</strong> is currently
+        <span class="badge badge-{{ tournament.status }}">{{ tournament.get_status_display }}</span>
+        — the tournament has not started yet. Your dashboard will update once the tournament goes live.
+    </div>
+</div>
+
+<div class="grid grid-2 mb-2">
+
+{# --- Team card --- #}
+<div class="card">
+    <div class="card-header">
+        Your Team
+        {% if is_captain %}<span style="font-size:0.8rem;font-weight:400;margin-left:0.5rem;color:var(--text-muted);">👑 Captain</span>{% endif %}
+    </div>
+    <div class="card-body">
+        <div style="font-size:1.25rem;font-weight:700;margin-bottom:0.2rem;">{{ team.name }}</div>
+        {% if team.department %}
+        <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.75rem;">{{ team.department }}</div>
+        {% endif %}
+
+        {# Member progress bar #}
+        <div style="margin:0.75rem 0 1rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;">
+                <span style="font-size:0.85rem;color:var(--text-muted);">Players enrolled</span>
+                <span style="font-size:0.95rem;font-weight:700;{% if is_team_full %}color:var(--success);{% else %}color:var(--primary);{% endif %}">
+                    {{ team_member_count }} / {{ tournament.players_per_team }}
+                </span>
+            </div>
+            <div style="height:10px;background:var(--border);border-radius:5px;overflow:hidden;">
+                <div style="height:100%;border-radius:5px;width:{% widthratio team_member_count tournament.players_per_team 100 %}%;background:{% if is_team_full %}var(--success){% else %}var(--primary){% endif %};transition:width 0.3s;"></div>
+            </div>
+        </div>
+
+        {% if is_team_full %}
+        <div class="alert alert-success" style="margin-bottom:1rem;">✅ Team roster is complete!</div>
+        {% else %}
+        <div class="alert alert-warning" style="margin-bottom:1rem;">
+            ⏳ Waiting for <strong>{{ players_needed }}</strong> more player{{ players_needed|pluralize }} to join.
+        </div>
+        {% endif %}
+
+        {# Members list #}
+        {% if team_members %}
+        <div style="font-size:0.8rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);margin-bottom:0.4rem;">Members</div>
+        <div style="display:flex;flex-direction:column;gap:0.35rem;">
+            {% for m in team_members %}
+            <div style="display:flex;align-items:center;gap:0.5rem;font-size:0.9rem;">
+                <span style="width:28px;height:28px;border-radius:50%;background:var(--primary-light,#e0e7ff);color:var(--primary);display:inline-flex;align-items:center;justify-content:center;font-size:0.75rem;font-weight:700;flex-shrink:0;">
+                    {{ m.user.get_full_name|default:m.user.username|slice:":1"|upper }}
+                </span>
+                <span>{{ m.user.get_full_name|default:m.user.username }}</span>
+                {% if m.role == 'captain' %}
+                <span style="font-size:0.7rem;background:var(--primary-light,#e0e7ff);color:var(--primary);padding:1px 6px;border-radius:10px;">captain</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if is_captain %}
+        <div style="margin-top:1rem;">
+            <a href="{% url 'team_preferences' pk=team.pk %}" class="btn btn-outline btn-sm">Court Preferences</a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{# --- Tournament info card --- #}
+<div class="card">
+    <div class="card-header">Tournament Details</div>
+    <div class="card-body">
+        <dl style="display:grid;grid-template-columns:auto 1fr;gap:0.45rem 1rem;font-size:0.9rem;margin:0;">
+            <dt style="color:var(--text-muted);white-space:nowrap;">Name</dt>
+            <dd style="font-weight:600;margin:0;">{{ tournament.name }}</dd>
+
+            <dt style="color:var(--text-muted);">Sport</dt>
+            <dd style="margin:0;">{{ tournament.get_sport_type_display }}</dd>
+
+            <dt style="color:var(--text-muted);">Format</dt>
+            <dd style="margin:0;">{{ tournament.get_format_display }}</dd>
+
+            <dt style="color:var(--text-muted);">Team size</dt>
+            <dd style="margin:0;">{{ tournament.players_per_team }} player{{ tournament.players_per_team|pluralize }}</dd>
+
+            <dt style="color:var(--text-muted);">Status</dt>
+            <dd style="margin:0;"><span class="badge badge-{{ tournament.status }}">{{ tournament.get_status_display }}</span></dd>
+
+            {% if tournament.start_date %}
+            <dt style="color:var(--text-muted);">Start date</dt>
+            <dd style="margin:0;">{{ tournament.start_date|date:"N j, Y" }}</dd>
+            {% endif %}
+        </dl>
+    </div>
+</div>
+
+</div>{# end grid-2 #}
+
+{# --- Registration progress --- #}
+<div class="card">
+    <div class="card-header">Registration Progress</div>
+    <div class="card-body">
+        <div style="display:flex;align-items:center;gap:2rem;flex-wrap:wrap;">
+            <div style="text-align:center;">
+                <div style="font-size:2rem;font-weight:800;color:var(--primary);">{{ registered_teams_count }}</div>
+                <div style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-muted);">Teams Registered</div>
+            </div>
+            {% if tournament.expected_teams_count %}
+            <div style="flex:1;min-width:160px;">
+                <div style="display:flex;justify-content:space-between;font-size:0.8rem;color:var(--text-muted);margin-bottom:0.35rem;">
+                    <span>{{ registered_teams_count }} / {{ tournament.expected_teams_count }} expected</span>
+                    <span>{% widthratio registered_teams_count tournament.expected_teams_count 100 %}%</span>
+                </div>
+                <div style="height:10px;background:var(--border);border-radius:5px;overflow:hidden;">
+                    <div style="height:100%;border-radius:5px;width:{% widthratio registered_teams_count tournament.expected_teams_count 100 %}%;background:var(--primary);"></div>
+                </div>
+            </div>
+            {% endif %}
+            <div style="font-size:0.85rem;color:var(--text-muted);">
+                {% if tournament.status == 'registration_open' %}
+                    Registration is open. Share the tournament link so more teams can join.
+                {% elif tournament.status == 'ready' %}
+                    Registration closed. Waiting for the organizer to generate the schedule.
+                {% elif tournament.status == 'scheduled' %}
+                    Schedule is drafted. The tournament will start soon.
+                {% else %}
+                    Tournament is being configured by the organizer.
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endif %}{# end active/completed check #}
 
 {% endif %}{# end if team #}
 {% endif %}
