@@ -701,10 +701,19 @@ def dashboard_view(request):
         context["completed_tournaments_count"] = all_tournaments.filter(status="completed").count()
     if tournament and is_organizer:
         context["total_teams"] = tournament.teams.count()
+        _status_counts = {
+            row["status"]: row["count"]
+            for row in tournament.matches.values("status").annotate(count=Count("id"))
+        }
         context["total_matches"] = tournament.matches.count()
-        context["confirmed_matches"] = tournament.matches.filter(status="confirmed").count()
-        context["pending_matches_count"] = tournament.matches.filter(status="pending_confirmation").count()
-        context["disputed_matches"] = tournament.matches.filter(status="disputed").count()
+        context["upcoming_matches_count"] = _status_counts.get("upcoming", 0)
+        context["in_progress_matches"] = _status_counts.get("in_progress", 0)
+        context["pending_matches_count"] = _status_counts.get("pending_confirmation", 0)
+        context["confirmed_matches"] = _status_counts.get("confirmed", 0)
+        context["forfeited_matches"] = _status_counts.get("forfeited", 0)
+        context["disputed_matches"] = _status_counts.get("disputed", 0)
+        context["cancelled_matches"] = _status_counts.get("cancelled", 0)
+        context["bye_matches"] = _status_counts.get("bye", 0)
     context.update(_tournament_context(request, tournament))
     return _render_refreshable_page(
         request,
@@ -1130,6 +1139,10 @@ def fixtures_view(request):
     teams = tournament.teams.all()
     courts = tournament.courts.all()
     groups = sorted(set(tournament.teams.exclude(group="").values_list("group", flat=True)))
+    _status_counts = {
+        row["status"]: row["count"]
+        for row in tournament.matches.values("status").annotate(count=Count("id"))
+    }
     context = {
         "tournament": tournament,
         "matches": matches,
@@ -1145,6 +1158,14 @@ def fixtures_view(request):
         "total_pages": total_pages,
         "page_range": range(1, total_pages + 1),
         "team": _get_team(request.user),
+        "upcoming_matches_count": _status_counts.get("upcoming", 0),
+        "in_progress_matches": _status_counts.get("in_progress", 0),
+        "pending_matches_count": _status_counts.get("pending_confirmation", 0),
+        "confirmed_matches": _status_counts.get("confirmed", 0),
+        "forfeited_matches": _status_counts.get("forfeited", 0),
+        "disputed_matches": _status_counts.get("disputed", 0),
+        "cancelled_matches": _status_counts.get("cancelled", 0),
+        "bye_matches": _status_counts.get("bye", 0),
         **_tournament_context(request, tournament),
     }
     return _render_refreshable_page(
