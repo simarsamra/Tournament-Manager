@@ -30,6 +30,11 @@
             {% if team %}
             <div class="sidebar-section">My Team</div>
             <a href="{% url 'team_detail' pk=team.pk %}" class="{% if request.resolver_match.url_name == 'team_detail' %}active{% endif %}">🏅 {{ team.name }}</a>
+            {% if joinable_tournaments %}
+            <a href="{% url 'join_tournament_list' %}" class="{% if request.resolver_match.url_name == 'join_tournament_list' or request.resolver_match.url_name == 'join_tournament' or request.resolver_match.url_name == 'create_team' %}active{% endif %}" style="margin-top:0.5rem;">➕ Join New Tournament
+                <span style="font-size:0.7rem;background:var(--primary);color:#fff;border-radius:10px;padding:1px 7px;margin-left:0.3rem;vertical-align:middle;">{{ joinable_tournaments|length }}</span>
+            </a>
+            {% endif %}
             {% else %}
             <div class="sidebar-section">Tournaments</div>
             <a href="{% url 'join_tournament_list' %}" class="{% if request.resolver_match.url_name == 'join_tournament_list' or request.resolver_match.url_name == 'join_tournament' or request.resolver_match.url_name == 'create_team' %}active{% endif %}">🎯 Join a Tournament</a>

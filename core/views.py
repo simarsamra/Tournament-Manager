@@ -101,15 +101,22 @@ def _tournament_context(request, tournament=None):
     user_tournament_ids = list(
         request.user.memberships.values_list("team__tournament_id", flat=True).distinct()
     )
+    ctx = {}
     if len(user_tournament_ids) > 1:
         user_tournaments = list(
             Tournament.objects.filter(pk__in=user_tournament_ids).order_by("-created_at")
         )
-        return {
-            "user_tournaments": user_tournaments,
-            "selected_tournament": tournament,
-        }
-    return {}
+        ctx["user_tournaments"] = user_tournaments
+        ctx["selected_tournament"] = tournament
+    # Open tournaments the user has NOT yet joined — for sidebar prompt
+    joinable = list(
+        Tournament.objects.filter(status="registration_open")
+        .exclude(pk__in=user_tournament_ids)
+        .order_by("-created_at")
+    )
+    if joinable:
+        ctx["joinable_tournaments"] = joinable
+    return ctx
 
 
 def _get_team(user, tournament=None):
@@ -2226,12 +2233,22 @@ def delete_tournament(request, pk):
         tournament.teams.exclude(user__is_staff=True).values_list("user_id", flat=True)
     )
     tournament.delete()
+    # After the cascade, only delete users who have NO remaining memberships
+    # (i.e. they were solely registered for this tournament and have no other teams).
+    # Users who joined another tournament must be preserved.
     if team_user_ids:
-        User.objects.filter(
-            id__in=team_user_ids,
-            is_staff=False,
-            is_superuser=False,
-        ).delete()
+        users_still_active = set(
+            TeamMembership.objects.filter(user_id__in=team_user_ids)
+            .values_list("user_id", flat=True)
+            .distinct()
+        )
+        safe_to_delete = [uid for uid in team_user_ids if uid not in users_still_active]
+        if safe_to_delete:
+            User.objects.filter(
+                id__in=safe_to_delete,
+                is_staff=False,
+                is_superuser=False,
+            ).delete()
 
     log_action(request, "tournament_deleted", f"Tournament '{tournament_name}' deleted")
     messages.success(request, f"Tournament '{tournament_name}' deleted.")
