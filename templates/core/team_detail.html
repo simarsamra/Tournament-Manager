@@ -25,6 +25,9 @@
     <div class="card-body">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">
             <span><strong>Captain account:</strong> {{ team.user.username }}</span>
+            {% if team.department %}
+            <span><strong>Department:</strong> {{ team.department }}</span>
+            {% endif %}
             {% if is_organizer %}
             <div>
                 <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('reset-captain-pw').style.display=document.getElementById('reset-captain-pw').style.display==='none'?'block':'none'">Reset Captain Password</button>

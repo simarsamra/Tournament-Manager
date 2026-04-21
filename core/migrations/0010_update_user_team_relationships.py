@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('core', '0008_tournament_champion'),
+        ('core', '0009_team_department'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 

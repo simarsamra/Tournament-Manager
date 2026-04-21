@@ -591,6 +591,7 @@ def create_team_view(request, pk):
                     user=request.user,
                     tournament=tournament,
                     name=team_name,
+                    department=form.cleaned_data.get("department", "").strip(),
                 )
                 TeamMembership.objects.create(team=team, user=request.user, role="captain")
                 team.preferred_courts.set(form.cleaned_data.get("preferred_courts") or [])

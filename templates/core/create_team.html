@@ -17,6 +17,11 @@
                     {{ form.team_name }}
                     {% if form.team_name.errors %}<small class="text-danger">{{ form.team_name.errors.0 }}</small>{% endif %}
                 </div>
+                <div class="form-group">
+                    <label for="{{ form.department.id_for_label }}">Department <span class="text-muted">(optional)</span></label>
+                    {{ form.department }}
+                    {% if form.department.errors %}<small class="text-danger">{{ form.department.errors.0 }}</small>{% endif %}
+                </div>
                 {% if form.preferred_courts.field.queryset.exists %}
                 <div class="form-group">
                     <label>Preferred Courts</label>

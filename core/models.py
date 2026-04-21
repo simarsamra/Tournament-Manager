@@ -170,6 +170,7 @@ class Team(models.Model):
         Tournament, on_delete=models.CASCADE, related_name="teams"
     )
     name = models.CharField(max_length=100)
+    department = models.CharField(max_length=120, blank=True, default="")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
     withdrawn_at = models.DateTimeField(null=True, blank=True)
     group = models.CharField(max_length=5, blank=True, default="")
