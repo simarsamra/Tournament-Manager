@@ -189,6 +189,24 @@ class Player(models.Model):
         return f"{self.name} ({self.team.name})"
 
 
+class TeamMembership(models.Model):
+    ROLE_CHOICES = [
+        ("captain", "Captain"),
+        ("member", "Member"),
+    ]
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="memberships")
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="team_membership")
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="member")
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["role", "joined_at"]
+
+    def __str__(self):
+        return f"{self.user.username} ({self.get_role_display()}) — {self.team.name}"
+
+
 class Match(models.Model):
     STATUS_CHOICES = [
         ("upcoming", "Upcoming"),

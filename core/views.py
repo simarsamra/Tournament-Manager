@@ -18,11 +18,12 @@ from django.views.decorators.http import require_POST
 from .models import (
     Tournament, Court, TimeSlot, Team, Match,
     RescheduleRequest, NoShowReport, OpenSlot, AuditLog, BackupRecord, Player, CourtAvailability,
+    TeamMembership,
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
     ScoreSubmitForm, RescheduleForm, TeamPreferencesForm, BulkTeamForm,
-    BulkTeamFileForm, CourtAvailabilityForm,
+    BulkTeamFileForm, CourtAvailabilityForm, TeamMemberInviteForm,
 )
 from .scheduling import (
     generate_fixtures,
@@ -91,7 +92,16 @@ def _get_team(user):
     try:
         return user.team
     except (Team.DoesNotExist, AttributeError):
+        pass
+    try:
+        return user.team_membership.team
+    except (TeamMembership.DoesNotExist, AttributeError):
         return None
+
+
+def _is_captain(user, team):
+    """Return True only if user is the registered captain account for this team."""
+    return team is not None and team.user_id == user.pk
 
 
 def _is_organizer(user):
@@ -403,6 +413,7 @@ def register_view(request, pk=None):
                 tournament=tournament,
                 name=team_name,
             )
+            TeamMembership.objects.create(team=team, user=user, role="captain")
             team.preferred_courts.set(form.cleaned_data.get("preferred_courts", []))
             player_names_text = form.cleaned_data.get("player_names", "").strip()
             if player_names_text:
@@ -832,6 +843,7 @@ def _create_teams_from_data(tournament, team_data_list, request):
             continue
         user = User.objects.create_user(username=username, password=password)
         team = Team.objects.create(user=user, tournament=tournament, name=team_name)
+        TeamMembership.objects.create(team=team, user=user, role="captain")
         for pname in player_names:
             Player.objects.create(team=team, name=pname)
         added += 1
@@ -1061,7 +1073,8 @@ def match_detail(request, pk):
     ).first()
     no_show_window_open = bool(match.scheduled_time and match.scheduled_time <= timezone.now())
     can_mark_no_show = _is_organizer(request.user) and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress") and no_show_window_open
-    can_report_no_show = is_participant and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress") and no_show_window_open and not pending_no_show_report
+    can_report_no_show = is_participant and _is_captain(request.user, team) and bool(match.team1_id and match.team2_id) and match.status in ("upcoming", "in_progress") and no_show_window_open and not pending_no_show_report
+    can_reschedule = is_participant and _is_captain(request.user, team)
     reschedule_form = RescheduleForm(tournament=match.tournament)
     open_slot_choices = _build_open_slot_choices(match, reschedule_form.fields["open_slot"].queryset)
     context = {
@@ -1074,6 +1087,7 @@ def match_detail(request, pk):
         "can_dispute": can_dispute,
         "can_mark_no_show": can_mark_no_show,
         "can_report_no_show": can_report_no_show,
+        "can_reschedule": can_reschedule,
         "pending_no_show_report": pending_no_show_report,
         "score_form": ScoreSubmitForm(),
         "reschedule_form": reschedule_form,
@@ -1242,6 +1256,9 @@ def request_reschedule(request, pk):
     team = _get_team(request.user)
     if not team or (match.team1 != team and match.team2 != team):
         messages.error(request, "Not a participant.")
+        return redirect("match_detail", pk=pk)
+    if not _is_captain(request.user, team) and not _is_organizer(request.user):
+        messages.error(request, "Only the team captain can request rescheduling.")
         return redirect("match_detail", pk=pk)
     if match.status not in ("upcoming",):
         messages.error(request, "Only upcoming matches can be rescheduled.")
@@ -1418,13 +1435,78 @@ def team_detail(request, pk):
         "upcoming": matches.filter(status__in=["upcoming", "in_progress"]).count(),
     }
     stats["losses"] = stats["played"] - stats["wins"]
+    is_organizer = _is_organizer(request.user)
+    is_own_team = _get_team(request.user) == team
+    is_captain = _is_captain(request.user, team)
     return render(request, "core/team_detail.html", {
         "team": team, "tournament": tournament, "matches": matches, "stats": stats,
         "players": team.players.all(),
-        "is_organizer": _is_organizer(request.user),
-        "is_own_team": _get_team(request.user) == team,
+        "is_organizer": is_organizer,
+        "is_own_team": is_own_team,
+        "is_captain": is_captain,
+        "memberships": team.memberships.select_related("user").order_by("role", "joined_at"),
+        "invite_form": TeamMemberInviteForm() if (is_captain or is_organizer) else None,
         **_tournament_context(request, tournament),
     })
+
+
+@login_required
+def manage_team_members(request, pk):
+    team = get_object_or_404(Team, pk=pk)
+    user_team = _get_team(request.user)
+    is_organizer = _is_organizer(request.user)
+    if not is_organizer and (user_team != team or not _is_captain(request.user, user_team)):
+        messages.error(request, "Only the team captain can manage members.")
+        return redirect("team_detail", pk=pk)
+    if request.method == "POST":
+        form = TeamMemberInviteForm(request.POST)
+        if form.is_valid():
+            new_user = User.objects.create_user(
+                username=form.cleaned_data["username"],
+                password=form.cleaned_data["password"],
+            )
+            TeamMembership.objects.create(team=team, user=new_user, role="member")
+            log_action(
+                request,
+                "team_member_added",
+                f"Member '{new_user.username}' added to team '{team.name}'",
+                tournament=team.tournament,
+            )
+            messages.success(request, f"Account '{new_user.username}' created and added to {team.name}.")
+        else:
+            for error in form.non_field_errors():
+                messages.error(request, error)
+            for field in form:
+                for error in field.errors:
+                    messages.error(request, f"{field.label}: {error}")
+    return redirect("team_detail", pk=pk)
+
+
+@login_required
+@require_POST
+def remove_team_member(request, pk, user_pk):
+    team = get_object_or_404(Team, pk=pk)
+    user_team = _get_team(request.user)
+    is_organizer = _is_organizer(request.user)
+    if not is_organizer and (user_team != team or not _is_captain(request.user, user_team)):
+        messages.error(request, "Only the team captain can remove members.")
+        return redirect("team_detail", pk=pk)
+    membership = get_object_or_404(TeamMembership, team=team, user_id=user_pk)
+    if membership.role == "captain":
+        messages.error(request, "The captain account cannot be removed.")
+        return redirect("team_detail", pk=pk)
+    removed_username = membership.user.username
+    member_user = membership.user
+    membership.delete()
+    member_user.delete()
+    log_action(
+        request,
+        "team_member_removed",
+        f"Member '{removed_username}' removed from team '{team.name}'",
+        tournament=team.tournament,
+    )
+    messages.success(request, f"Member '{removed_username}' has been removed.")
+    return redirect("team_detail", pk=pk)
 
 
 @login_required
@@ -1433,8 +1515,11 @@ def withdraw_team(request, pk):
     team = get_object_or_404(Team, pk=pk)
     user_team = _get_team(request.user)
     is_organizer = _is_organizer(request.user)
-    if team != user_team and not _is_organizer(request.user):
+    if team != user_team and not is_organizer:
         messages.error(request, "Not authorized.")
+        return redirect("team_detail", pk=pk)
+    if team == user_team and not is_organizer and not _is_captain(request.user, user_team):
+        messages.error(request, "Only the team captain can withdraw the team.")
         return redirect("team_detail", pk=pk)
     if team.status == "withdrawn":
         messages.info(request, f"Team '{team.name}' is already withdrawn.")
@@ -1465,6 +1550,9 @@ def report_no_show(request, pk):
     team = _get_team(request.user)
     if not team or (match.team1 != team and match.team2 != team):
         messages.error(request, "Only participating teams can report a no-show.")
+        return redirect("match_detail", pk=pk)
+    if not _is_captain(request.user, team) and not _is_organizer(request.user):
+        messages.error(request, "Only the team captain can report a no-show.")
         return redirect("match_detail", pk=pk)
     if match.status not in ("upcoming", "in_progress"):
         messages.error(request, "No-shows can only be reported for active or upcoming matches.")
@@ -1556,8 +1644,8 @@ def mark_no_show(request, pk):
 def team_preferences(request, pk):
     team = get_object_or_404(Team, pk=pk)
     user_team = _get_team(request.user)
-    if team != user_team and not _is_organizer(request.user):
-        messages.error(request, "Not authorized.")
+    if (team != user_team or not _is_captain(request.user, user_team)) and not _is_organizer(request.user):
+        messages.error(request, "Only the team captain or an organizer can update preferences.")
         return redirect("team_detail", pk=pk)
     if request.method == "POST":
         form = TeamPreferencesForm(request.POST, tournament=team.tournament)

@@ -284,3 +284,26 @@ class BulkTeamFileForm(forms.Form):
         widget=forms.FileInput(attrs={"class": "form-control", "accept": ".csv,.txt"}),
         help_text="CSV/TXT file: team_name,username,password,player1;player2;... (one per line)"
     )
+
+
+class TeamMemberInviteForm(forms.Form):
+    username = forms.CharField(
+        max_length=150,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Username"}),
+    )
+    password = forms.CharField(
+        widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Password"}),
+    )
+    password_confirm = forms.CharField(
+        label="Confirm password",
+        widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Confirm Password"}),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("password") != cleaned.get("password_confirm"):
+            raise forms.ValidationError("Passwords do not match.")
+        username = cleaned.get("username", "").strip()
+        if username and User.objects.filter(username=username).exists():
+            raise forms.ValidationError("Username already taken.")
+        return cleaned
