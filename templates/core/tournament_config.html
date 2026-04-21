@@ -156,6 +156,11 @@
                     <strong>{{ t.name }}</strong>
                     <span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span>
                 </div>
+                {% if t.department %}
+                <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
+                    Department: {{ t.department }}
+                </div>
+                {% endif %}
                 {% if t.players.all %}
                 <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
                     Players: {% for p in t.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% endfor %}

@@ -26,6 +26,11 @@
                 {% if form.username.errors %}<small class="text-danger">{{ form.username.errors.0 }}</small>{% endif %}
             </div>
             <div class="form-group">
+                <label for="{{ form.department.id_for_label }}">{{ form.department.label }}</label>
+                {{ form.department }}
+                {% if form.department.errors %}<small class="text-danger">{{ form.department.errors.0 }}</small>{% endif %}
+            </div>
+            <div class="form-group">
                 <label for="{{ form.password.id_for_label }}">{{ form.password.label }}</label>
                 {{ form.password }}
                 {% if form.password.errors %}<small class="text-danger">{{ form.password.errors.0 }}</small>{% endif %}
@@ -56,6 +61,7 @@
                 <div class="card-body" style="font-size:0.9rem;">
                     <div><strong>Team:</strong> <span data-preview="team_name">-</span></div>
                     <div><strong>Captain username:</strong> <span data-preview="username">-</span></div>
+                    <div><strong>Department:</strong> <span data-preview="department">-</span></div>
                     <div><strong>Players entered:</strong> <span data-preview="player_count">0</span></div>
                     <div><strong>Preferred courts:</strong> <span data-preview="preferred_courts">None selected</span></div>
                 </div>
