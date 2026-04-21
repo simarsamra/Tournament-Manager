@@ -82,6 +82,14 @@ class Tournament(models.Model):
     default_match_duration = models.IntegerField(
         default=30, help_text="Minutes per match"
     )
+    champion = models.ForeignKey(
+        "Team",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="championships",
+        help_text="Team that won the tournament",
+    )
 
     def get_tiebreaker_order(self):
         return json.loads(self.tiebreaker_order)

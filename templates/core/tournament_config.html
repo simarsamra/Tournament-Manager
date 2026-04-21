@@ -2,6 +2,22 @@
 {% block title %}Configure: {{ tournament.name }}{% endblock %}
 {% block page_header %}Configure Tournament{% endblock %}
 {% block content %}
+
+{% if tournament.status == 'completed' %}
+<div class="alert alert-success" style="display:flex;align-items:center;gap:0.75rem;font-size:1.05rem;margin-bottom:1.25rem;">
+    <span style="font-size:1.6rem;">🏆</span>
+    <div>
+        <strong>Tournament Complete!</strong>
+        {% if tournament.champion %}
+            Champion: <strong>{{ tournament.champion.name }}</strong>
+        {% else %}
+            No champion recorded.
+        {% endif %}
+        {% if tournament.completed_at %}<span class="text-muted" style="font-size:0.85rem;margin-left:0.5rem;">Completed {{ tournament.completed_at|date:"M d, Y H:i" }}</span>{% endif %}
+    </div>
+</div>
+{% endif %}
+
 <h1 class="page-title">{{ tournament.name }} <span class="badge badge-{{ tournament.status }}">{{ tournament.get_status_display }}</span></h1>
 <p class="text-muted mb-2">Sport: {{ tournament.get_sport_type_display }} | Format: {{ tournament.get_format_display }} | Players/Team: {{ tournament.players_per_team }} | Expected Teams: {{ tournament.expected_teams_count|default:"-" }} | Start: {{ tournament.start_date|default:"-" }} | Duration: {{ tournament.default_match_duration }}min</p>
 
@@ -205,6 +221,13 @@
                 <form method="post" action="{% url 'start_tournament' pk=tournament.pk %}">
                     {% csrf_token %}
                     <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Publish this reviewed schedule and start the tournament?')">Publish & Start</button>
+                </form>
+                {% endif %}
+
+                {% if tournament.status == 'active' %}
+                <form method="post" action="{% url 'complete_tournament' pk=tournament.pk %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Mark this tournament as completed? This will determine the champion from current results.')">Mark as Completed</button>
                 </form>
                 {% endif %}
             </div>

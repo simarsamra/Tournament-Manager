@@ -33,7 +33,7 @@ from .scheduling import (
     estimate_required_matches,
     count_available_slots,
 )
-from .standings import calculate_standings, advance_winner, get_bracket_data, check_group_stage_complete
+from .standings import calculate_standings, advance_winner, get_bracket_data, check_group_stage_complete, _determine_champion
 from .withdrawals import handle_withdrawal
 from .backup import create_backup, validate_backup, restore_backup, list_backups, delete_backup
 from .audit import log_action
@@ -149,12 +149,63 @@ def _finalize_no_show_match(match, loser, winner, reason_text, report=None, repo
         generate_consolation_if_ready(tournament)
     if tournament.format == "hybrid" and match.group:
         check_group_stage_complete(tournament)
+    _check_and_finalize_tournament(tournament)
 
     if report and report.status == "pending":
         report.status = report_status
         report.resolved_at = timezone.now()
         report.save(update_fields=["status", "resolved_at"])
 
+    return True
+
+
+def _check_and_finalize_tournament(tournament):
+    """
+    Detect whether all matches are done and, if so, mark the tournament
+    completed and store the champion.  Safe to call after every score
+    confirmation — it is a no-op if the tournament is not yet active or
+    if matches remain.
+    """
+    if tournament.status != "active":
+        return False
+
+    fmt = tournament.format
+
+    if fmt in ("round_robin", "double_round_robin"):
+        # Complete when every match that has both teams assigned is terminal
+        pending = (
+            tournament.matches
+            .filter(team1__isnull=False, team2__isnull=False)
+            .exclude(status__in=["confirmed", "forfeited", "cancelled", "bye"])
+        )
+        if pending.exists():
+            return False
+
+    else:
+        # Bracket formats: complete when the winners-bracket final is confirmed
+        # (highest-round match with next_match=None and both teams filled)
+        final = (
+            tournament.matches
+            .filter(bracket_type="winners", next_match__isnull=True,
+                    team1__isnull=False, team2__isnull=False)
+            .order_by("-round_number")
+            .first()
+        )
+        if not final or final.status != "confirmed":
+            return False
+
+    # All done — mark completed
+    tournament.status = "completed"
+    tournament.completed_at = timezone.now()
+    tournament.champion = _determine_champion(tournament)
+    tournament.save(update_fields=["status", "completed_at", "champion"])
+    log_action(
+        None,
+        "tournament_completed",
+        f"Tournament '{tournament.name}' completed."
+        + (f" Champion: {tournament.champion.name}" if tournament.champion else ""),
+        tournament=tournament,
+    )
     return True
 
 
@@ -992,6 +1043,35 @@ def start_tournament(request, pk):
 
 @login_required
 @require_POST
+def complete_tournament(request, pk):
+    """Organizer manual override to mark a tournament completed."""
+    if not _is_organizer(request.user):
+        return redirect("dashboard")
+    tournament = get_object_or_404(Tournament, pk=pk)
+    if tournament.status != "active":
+        messages.error(request, "Only active tournaments can be marked as completed.")
+        return redirect("tournament_config", pk=pk)
+    tournament.status = "completed"
+    tournament.completed_at = timezone.now()
+    tournament.champion = _determine_champion(tournament)
+    tournament.save(update_fields=["status", "completed_at", "champion"])
+    log_action(
+        request,
+        "tournament_completed",
+        f"Tournament '{tournament.name}' manually marked completed."
+        + (f" Champion: {tournament.champion.name}" if tournament.champion else ""),
+        tournament=tournament,
+    )
+    messages.success(
+        request,
+        "Tournament marked as completed."
+        + (f" Champion: {tournament.champion.name}" if tournament.champion else ""),
+    )
+    return redirect("tournament_config", pk=pk)
+
+
+@login_required
+@require_POST
 def select_tournament(request):
     if not _is_organizer(request.user):
         messages.error(request, "Only organizers can switch tournaments.")
@@ -1135,6 +1215,9 @@ def submit_score(request, pk):
     if not team or (match.team1 != team and match.team2 != team):
         messages.error(request, "You are not a participant in this match.")
         return redirect("match_detail", pk=pk)
+    if match.tournament.status == "completed":
+        messages.error(request, "This tournament has already been completed.")
+        return redirect("match_detail", pk=pk)
     if match.status not in ("upcoming", "in_progress"):
         messages.error(request, "Score cannot be submitted for this match.")
         return redirect("match_detail", pk=pk)
@@ -1190,6 +1273,7 @@ def confirm_score(request, pk):
         generate_consolation_if_ready(tournament)
     if tournament.format == "hybrid" and match.group:
         check_group_stage_complete(tournament)
+    _check_and_finalize_tournament(tournament)
     log_action(request, "score_confirmed",
                f"Score confirmed for {match}: {match.score_team1}-{match.score_team2}",
                tournament=tournament)
@@ -1262,6 +1346,7 @@ def resolve_dispute(request, pk):
             generate_consolation_if_ready(tournament)
         if tournament.format == "hybrid" and match.group:
             check_group_stage_complete(tournament)
+        _check_and_finalize_tournament(tournament)
         log_action(request, "dispute_resolved",
                    f"Dispute resolved for {match}: {match.score_team1}-{match.score_team2}",
                    tournament=tournament)

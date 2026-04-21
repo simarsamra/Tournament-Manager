@@ -40,7 +40,7 @@
         <div class="table-container">
             <table>
                 <thead>
-                    <tr><th>Name</th><th>Status</th><th>Format</th><th>Teams</th><th>Matches</th><th></th></tr>
+                    <tr><th>Name</th><th>Status</th><th>Format</th><th>Teams</th><th>Matches</th><th>Champion</th><th></th></tr>
                 </thead>
                 <tbody>
                     {% for t in all_tournaments %}
@@ -55,6 +55,13 @@
                         <td>{{ t.get_format_display }}</td>
                         <td>{{ t.team_count }}</td>
                         <td>{{ t.match_count }}</td>
+                        <td>
+                            {% if t.status == 'completed' and t.champion %}
+                            <span style="font-size:0.9rem;">🏆 {{ t.champion.name }}</span>
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
                         <td>
                             <form method="post" action="{% url 'select_tournament' %}" style="display:inline-block;">
                                 {% csrf_token %}
@@ -183,7 +190,35 @@
 {# --- Row 1: Next Match Intelligence + Pending Actions --- #}
 <div class="grid grid-2">
 
-<div class="card">
+<div class="card {% if tournament.status == 'completed' %}card-success{% endif %}">
+    {% if tournament.status == 'completed' %}
+    <div class="card-header">🏆 Tournament Complete</div>
+    <div class="card-body">
+        {% if tournament.champion %}
+            {% if tournament.champion == team %}
+            <div style="text-align:center;padding:1rem 0;">
+                <div style="font-size:2.5rem;">🥇</div>
+                <div style="font-size:1.3rem;font-weight:700;color:var(--success);margin:0.5rem 0;">You are the Champion!</div>
+                <div style="font-size:0.9rem;color:var(--text-muted);">Congratulations, <strong>{{ team.name }}</strong>!</div>
+            </div>
+            {% else %}
+            <div style="text-align:center;padding:1rem 0;">
+                <div style="font-size:2rem;">🏅</div>
+                <div style="font-size:1.1rem;font-weight:700;margin:0.5rem 0;">Champion: {{ tournament.champion.name }}</div>
+                <div style="font-size:0.9rem;color:var(--text-muted);">Tournament has concluded. Thanks for participating!</div>
+            </div>
+            {% endif %}
+        {% else %}
+        <div style="text-align:center;padding:1rem 0;">
+            <div style="font-size:2rem;">✅</div>
+            <div style="font-size:1.1rem;font-weight:600;margin:0.5rem 0;">Tournament has concluded.</div>
+        </div>
+        {% endif %}
+        <div style="text-align:center;margin-top:0.5rem;">
+            <a href="{% url 'standings' %}" class="btn btn-primary btn-sm">View Final Standings</a>
+        </div>
+    </div>
+    {% else %}
     <div class="card-header">Next Match</div>
     <div class="card-body">
         {% if next_match %}
@@ -220,6 +255,7 @@
         <p class="text-muted">No upcoming matches scheduled.</p>
         {% endif %}
     </div>
+    {% endif %}
 </div>
 
 <div class="card card-warning">
