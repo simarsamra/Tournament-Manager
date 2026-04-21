@@ -139,9 +139,17 @@ def get_bracket_data(tournament):
     return dict(sorted(rounds.items()))
 
 
+def _seed_order(size):
+    """Return standard bracket seed positions for a power-of-two size."""
+    if size == 1:
+        return [1]
+    half = _seed_order(size // 2)
+    return [item for seed in half for item in (seed, size + 1 - seed)]
+
+
 def check_group_stage_complete(tournament):
     """Check if all group matches are done, generate knockout if so."""
-    from .scheduling import _bracket_seed_order, generate_knockout
+    from .scheduling import generate_knockout
 
     group_matches = tournament.matches.filter(group__gt="").exclude(group="")
     if not group_matches.exists():
@@ -179,7 +187,7 @@ def check_group_stage_complete(tournament):
                 return False
 
             bracket_size = len(first_round) * 2
-            seed_order = _bracket_seed_order(bracket_size)
+            seed_order = _seed_order(bracket_size)
             seeded = [None] * bracket_size
             for pos, seed_num in enumerate(seed_order):
                 if seed_num <= len(advancing):
@@ -202,12 +210,19 @@ def check_group_stage_complete(tournament):
 
             bye_matches = []
             for idx, match in enumerate(first_round):
-                t1 = seeded[idx * 2]
-                t2 = seeded[idx * 2 + 1]
+                slot1 = idx * 2
+                slot2 = slot1 + 1
+                t1 = seeded[slot1] if slot1 < len(seeded) else None
+                t2 = seeded[slot2] if slot2 < len(seeded) else None
                 is_bye = t1 is None or t2 is None
                 match.team1 = t1
                 match.team2 = t2
-                match.winner = t1 if (is_bye and t1) else (t2 if (is_bye and t2) else None)
+                match.winner = None
+                if is_bye:
+                    if t1:
+                        match.winner = t1
+                    elif t2:
+                        match.winner = t2
                 match.score_team1 = None
                 match.score_team2 = None
                 match.submitted_by = None
