@@ -59,7 +59,7 @@
                                         {% if user_obj.is_staff %}Demote{% else %}Promote to Organizer{% endif %}
                                     </button>
                                 </form>
-                                <form method="post" action="{% url 'delete_user_account' user_pk=user_obj.pk %}" onsubmit="return confirm('Delete user account {{ user_obj.username }}?');">
+                                <form method="post" action="{% url 'delete_user_account' user_pk=user_obj.pk %}" onsubmit="return confirm('Delete user account {{ user_obj.username|escapejs }}?');">
                                     {% csrf_token %}
                                     <button type="submit" class="btn btn-danger">Delete User</button>
                                 </form>

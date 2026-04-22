@@ -146,8 +146,8 @@ def _is_organizer(user):
     return user.is_staff or user.is_superuser
 
 
-def _non_superuser_organizer_count(exclude_user_id=None):
-    qs = User.objects.filter(is_staff=True, is_superuser=False)
+def _organizer_count(exclude_user_id=None):
+    qs = User.objects.filter(Q(is_staff=True) | Q(is_superuser=True))
     if exclude_user_id is not None:
         qs = qs.exclude(pk=exclude_user_id)
     return qs.count()
@@ -2334,7 +2334,7 @@ def set_user_organizer(request, user_pk):
 
     make_organizer = request.POST.get("is_organizer") == "1"
     if not make_organizer and target.is_staff:
-        organizer_count = _non_superuser_organizer_count(exclude_user_id=target.pk)
+        organizer_count = _organizer_count(exclude_user_id=target.pk)
         if organizer_count < 1:
             messages.error(request, "At least one organizer account is required.")
             return redirect("settings")
@@ -2361,7 +2361,7 @@ def delete_user_account(request, user_pk):
         messages.error(request, "Superuser accounts cannot be deleted here.")
         return redirect("settings")
     if target.is_staff:
-        organizer_count = _non_superuser_organizer_count(exclude_user_id=target.pk)
+        organizer_count = _organizer_count(exclude_user_id=target.pk)
         if organizer_count < 1:
             messages.error(request, "At least one organizer account is required.")
             return redirect("settings")
