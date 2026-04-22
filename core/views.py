@@ -146,6 +146,13 @@ def _is_organizer(user):
     return user.is_staff or user.is_superuser
 
 
+def _non_superuser_organizer_count(exclude_user_id=None):
+    qs = User.objects.filter(is_staff=True, is_superuser=False)
+    if exclude_user_id is not None:
+        qs = qs.exclude(pk=exclude_user_id)
+    return qs.count()
+
+
 def _safe_page_param(request, default=1):
     """Return a safe positive page number from query params."""
     raw = request.GET.get("page", default)
@@ -2327,8 +2334,8 @@ def set_user_organizer(request, user_pk):
 
     make_organizer = request.POST.get("is_organizer") == "1"
     if not make_organizer and target.is_staff:
-        organizer_count = User.objects.filter(is_staff=True, is_superuser=False).count()
-        if organizer_count <= 1:
+        organizer_count = _non_superuser_organizer_count(exclude_user_id=target.pk)
+        if organizer_count < 1:
             messages.error(request, "At least one organizer account is required.")
             return redirect("settings")
     target.is_staff = make_organizer
@@ -2354,8 +2361,8 @@ def delete_user_account(request, user_pk):
         messages.error(request, "Superuser accounts cannot be deleted here.")
         return redirect("settings")
     if target.is_staff:
-        organizer_count = User.objects.filter(is_staff=True, is_superuser=False).count()
-        if organizer_count <= 1:
+        organizer_count = _non_superuser_organizer_count(exclude_user_id=target.pk)
+        if organizer_count < 1:
             messages.error(request, "At least one organizer account is required.")
             return redirect("settings")
 

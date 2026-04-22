@@ -285,6 +285,37 @@ class UXAndLogicRegressionTests(TestCase):
 		target.refresh_from_db()
 		self.assertFalse(target.is_staff)
 
+	def test_organizer_can_demote_another_organizer_if_one_remains(self):
+		other_organizer = User.objects.create_user(
+			username="other_organizer", password="pass123", is_staff=True
+		)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("set_user_organizer", kwargs={"user_pk": other_organizer.pk}),
+			{"is_organizer": "0"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		other_organizer.refresh_from_db()
+		self.assertFalse(other_organizer.is_staff)
+
+	def test_cannot_demote_last_organizer(self):
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("set_user_organizer", kwargs={"user_pk": self.organizer.pk}),
+			{"is_organizer": "0"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.organizer.refresh_from_db()
+		self.assertTrue(self.organizer.is_staff)
+		msgs = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("at least one organizer" in m.lower() for m in msgs))
+
 	def test_organizer_can_delete_user_account(self):
 		target = User.objects.create_user(username="delete_me", password="pass123")
 		self.client.force_login(self.organizer)
