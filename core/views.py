@@ -2332,7 +2332,11 @@ def set_user_organizer(request, user_pk):
         messages.error(request, "Superuser accounts cannot be modified here.")
         return redirect("settings")
 
-    make_organizer = request.POST.get("is_organizer") == "1"
+    role_value = request.POST.get("is_organizer")
+    if role_value not in {"0", "1"}:
+        messages.error(request, "Invalid organizer role update request.")
+        return redirect("settings")
+    make_organizer = role_value == "1"
     if not make_organizer and target.is_staff:
         organizer_count = _organizer_count(exclude_user_id=target.pk)
         if organizer_count < 1:
@@ -2341,7 +2345,7 @@ def set_user_organizer(request, user_pk):
     target.is_staff = make_organizer
     target.save(update_fields=["is_staff"])
 
-    action = "user_promoted_to_organizer" if make_organizer else "organizer_demoted_to_user"
+    action = "user_promoted_to_organizer" if make_organizer else "user_demoted_from_organizer"
     detail = f"User '{target.username}' role updated to {'organizer' if make_organizer else 'user'}."
     log_action(request, action, detail)
     messages.success(request, detail)

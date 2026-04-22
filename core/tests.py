@@ -316,6 +316,24 @@ class UXAndLogicRegressionTests(TestCase):
 		msgs = [str(m) for m in response.context["messages"]]
 		self.assertTrue(any("at least one organizer" in m.lower() for m in msgs))
 
+	def test_set_user_organizer_rejects_invalid_role_value(self):
+		target = User.objects.create_user(
+			username="invalid_role_target", password="pass123", is_staff=True
+		)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("set_user_organizer", kwargs={"user_pk": target.pk}),
+			{},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		target.refresh_from_db()
+		self.assertTrue(target.is_staff)
+		msgs = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("invalid organizer role update request" in m.lower() for m in msgs))
+
 	def test_organizer_can_delete_user_account(self):
 		target = User.objects.create_user(username="delete_me", password="pass123")
 		self.client.force_login(self.organizer)
