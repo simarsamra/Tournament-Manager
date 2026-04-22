@@ -2472,10 +2472,9 @@ def analytics_view(request):
             "team1_wins": h2h_t1_wins,
             "team2_wins": h2h_t2_wins,
             "draws": h2h_draws,
-            "team1_avg_score": round(h2h_t1_score_total / h2h_scored_matches, 1) if h2h_scored_matches else None,
-            "team2_avg_score": round(h2h_t2_score_total / h2h_scored_matches, 1) if h2h_scored_matches else None,
+            "team1_avg_score": round(h2h_t1_score_total / h2h_scored_matches, 1) if h2h_scored_matches > 0 else None,
+            "team2_avg_score": round(h2h_t2_score_total / h2h_scored_matches, 1) if h2h_scored_matches > 0 else None,
             "last_match": h2h_matches[0] if h2h_matches else None,
-            "scored_matches": h2h_scored_matches,
         }
 
     # --- Rolling form trend ---
@@ -2624,6 +2623,7 @@ def analytics_view(request):
             simulated_standings = list(by_team_id.values())
             for row in simulated_standings:
                 row["points"] += row["point_change"]
+            # Sort by projected points, then use standing metrics for deterministic tie-breaking.
             simulated_standings.sort(
                 key=lambda s: (s["points"], s.get("game_diff", 0), s.get("games_won", 0), s.get("wins", 0)),
                 reverse=True,
