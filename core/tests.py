@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.db import models
 from datetime import timedelta
 
-from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player, OpenSlot, RescheduleRequest, TeamMembership
+from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player, OpenSlot, RescheduleRequest, TeamMembership, AuditLog, BackupRecord
 from .scheduling import generate_fixtures
 from .standings import calculate_standings, advance_winner
 from .withdrawals import handle_withdrawal
@@ -358,6 +358,67 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertTrue(User.objects.filter(pk=self.organizer.pk).exists())
 		msgs = [str(m) for m in response.context["messages"]]
 		self.assertTrue(any("cannot delete your own account" in m.lower() for m in msgs))
+
+	def test_admin_can_reset_platform_and_preserve_only_admin_user(self):
+		admin = User.objects.create_superuser(
+			username="admin",
+			password="adminpass123",
+			email="admin@example.com",
+		)
+		target_user = User.objects.create_user(username="delete_me_after_reset", password="pass123")
+		tournament = self._create_tournament(name="Resettable Cup")
+		self._create_team(tournament, "Team One", username="team_one_user")
+		BackupRecord.objects.create(filename="dummy.json", created_by=admin, size_bytes=10)
+		AuditLog.objects.create(user=admin, action="setup", details="seeded")
+		self.client.force_login(admin)
+
+		response = self.client.post(
+			reverse("reset_platform_data"),
+			{"confirm_reset": "RESET"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertFalse(User.objects.filter(pk=target_user.pk).exists())
+		self.assertEqual(User.objects.count(), 1)
+		self.assertTrue(User.objects.filter(username="admin").exists())
+		self.assertEqual(Tournament.objects.count(), 0)
+		self.assertEqual(Team.objects.count(), 0)
+		self.assertEqual(AuditLog.objects.count(), 0)
+		self.assertEqual(BackupRecord.objects.count(), 0)
+
+	def test_non_admin_cannot_reset_platform(self):
+		tournament = self._create_tournament(name="Keep Cup")
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("reset_platform_data"),
+			{"confirm_reset": "RESET"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(Tournament.objects.filter(pk=tournament.pk).exists())
+		self.assertTrue(User.objects.filter(pk=self.organizer.pk).exists())
+
+	def test_admin_reset_platform_requires_confirmation(self):
+		admin = User.objects.create_superuser(
+			username="admin",
+			password="adminpass123",
+			email="admin@example.com",
+		)
+		tournament = self._create_tournament(name="Needs Confirmation")
+		self.client.force_login(admin)
+
+		response = self.client.post(
+			reverse("reset_platform_data"),
+			{"confirm_reset": "nope"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(Tournament.objects.filter(pk=tournament.pk).exists())
+		self.assertTrue(User.objects.filter(username="admin").exists())
 
 	def test_dashboard_shows_multiple_tournaments_to_organizer(self):
 		first = self._create_tournament(name="Spring Cup")

@@ -10,7 +10,7 @@ from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db import models as db_models
 from django.db.models import Q, Count, Avg, F
 from django.http import JsonResponse, HttpResponse
@@ -3030,6 +3030,34 @@ def delete_user_account(request, user_pk):
     target.delete()
     log_action(request, "user_deleted", f"User '{username}' account deleted.")
     messages.success(request, f"User '{username}' deleted.")
+    return redirect("settings")
+
+
+@login_required
+@require_POST
+def reset_platform_data(request):
+    if not request.user.is_superuser or request.user.username != "admin":
+        messages.error(request, "Only the admin account can reset the platform.")
+        return redirect("settings")
+
+    if request.POST.get("confirm_reset", "").strip().upper() != "RESET":
+        messages.error(request, "Platform reset was not confirmed.")
+        return redirect("settings")
+
+    admin_user = User.objects.filter(username="admin").first()
+    if admin_user is None:
+        messages.error(request, "Admin account not found. Reset cancelled.")
+        return redirect("settings")
+
+    with transaction.atomic():
+        Tournament.objects.all().delete()
+        AuditLog.objects.all().delete()
+        BackupRecord.objects.all().delete()
+        User.objects.exclude(pk=admin_user.pk).delete()
+
+    request.session.pop("selected_tournament_id", None)
+    request.session.pop("view_mode", None)
+    messages.success(request, "Platform reset complete. All data and non-admin users were deleted.")
     return redirect("settings")
 
 

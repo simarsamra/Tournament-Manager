@@ -87,6 +87,7 @@ urlpatterns = [
     path("settings/", views.settings_view, name="settings"),
     path("settings/users/<int:user_pk>/organizer/", views.set_user_organizer, name="set_user_organizer"),
     path("settings/users/<int:user_pk>/delete/", views.delete_user_account, name="delete_user_account"),
+    path("settings/reset-platform/", views.reset_platform_data, name="reset_platform_data"),
 
     # Public views (no login required)
     path("public/standings/", views.public_standings, name="public_standings"),

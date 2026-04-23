@@ -29,6 +29,15 @@
             <input type="hidden" name="confirm_delete" value="DELETE">
             <button type="submit" class="btn btn-danger">Delete Tournament</button>
         </form>
+        {% if request.user.is_superuser and request.user.username == "admin" %}
+        <hr style="margin:1rem 0;">
+        <p class="text-muted" style="margin-bottom:0.5rem;">Reset the entire platform by deleting all tournament data and all users except admin.</p>
+        <form method="post" action="{% url 'reset_platform_data' %}" onsubmit="return confirm('This will delete all data and all users except admin. Continue?');">
+            {% csrf_token %}
+            <input type="hidden" name="confirm_reset" value="RESET">
+            <button type="submit" class="btn btn-danger">Reset Platform</button>
+        </form>
+        {% endif %}
     </div>
 </div>
 
