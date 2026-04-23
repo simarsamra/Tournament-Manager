@@ -3045,10 +3045,12 @@ def reset_platform_data(request):
         return redirect("settings")
 
     with transaction.atomic():
+        # Tournament deletion cascades through teams, memberships, players, matches,
+        # courts, slots, and other tournament-scoped records via model FKs.
         Tournament.objects.all().delete()
         AuditLog.objects.all().delete()
         BackupRecord.objects.all().delete()
-        User.objects.exclude(pk=request.user.pk).delete()
+        User.objects.exclude(username="admin").delete()
 
     request.session.pop("selected_tournament_id", None)
     request.session.pop("view_mode", None)
