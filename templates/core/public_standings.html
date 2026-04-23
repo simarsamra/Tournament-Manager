@@ -78,7 +78,19 @@
             <div class="bracket-container" style="display:flex;">
                 {% for round_num, matches in bracket.items %}
                 <div class="bracket-round">
-                    <div class="bracket-round-title">Round {{ round_num }}</div>
+                    <div class="bracket-round-title">
+                        {% with match_count=matches|length %}
+                            {% if match_count == 1 %}
+                                Final
+                            {% elif match_count == 2 %}
+                                Semi-finals
+                            {% elif match_count == 4 %}
+                                Quarter-finals
+                            {% else %}
+                                Round {{ round_num }}
+                            {% endif %}
+                        {% endwith %}
+                    </div>
                     {% for m in matches %}
                     <div class="bracket-match-wrap">
                     <div class="bracket-match">

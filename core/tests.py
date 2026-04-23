@@ -1013,6 +1013,24 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertIn("bracket", response.context)
 		self.assertTrue(response.context["bracket"])
 
+	def test_knockout_standings_uses_quarter_semi_final_labels(self):
+		tournament = self._create_tournament(fmt="knockout", name="Knockout Labels")
+		for i in range(1, 9):
+			self._create_team(tournament, f"Team {i}", seed=i)
+		generate_fixtures(tournament)
+
+		self.client.force_login(self.organizer)
+		session = self.client.session
+		session["selected_tournament_id"] = tournament.pk
+		session.save()
+
+		response = self.client.get(reverse("standings"), follow=True)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Quarter-finals")
+		self.assertContains(response, "Semi-finals")
+		self.assertContains(response, "Final")
+
 	def test_analytics_exposes_head_to_head_form_and_prep_context(self):
 		tournament = self._create_tournament(fmt="round_robin", name="Analytics Context")
 		tournament.status = "active"
