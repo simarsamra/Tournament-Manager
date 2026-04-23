@@ -3044,16 +3044,11 @@ def reset_platform_data(request):
         messages.error(request, "Platform reset was not confirmed.")
         return redirect("settings")
 
-    admin_user = User.objects.filter(username="admin").first()
-    if admin_user is None:
-        messages.error(request, "Admin account not found. Reset cancelled.")
-        return redirect("settings")
-
     with transaction.atomic():
         Tournament.objects.all().delete()
         AuditLog.objects.all().delete()
         BackupRecord.objects.all().delete()
-        User.objects.exclude(pk=admin_user.pk).delete()
+        User.objects.exclude(pk=request.user.pk).delete()
 
     request.session.pop("selected_tournament_id", None)
     request.session.pop("view_mode", None)
