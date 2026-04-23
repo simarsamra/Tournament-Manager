@@ -18,7 +18,7 @@ urlpatterns = [
 
     # Dashboard
     path("dashboard/", views.dashboard_view, name="dashboard"),
-    path("", views.dashboard_view, name="home"),
+    path("", views.public_home, name="home"),
     path("toggle-view/", views.toggle_view_preference, name="toggle_view_preference"),
 
     # Tournament setup

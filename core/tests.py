@@ -238,9 +238,10 @@ class UXAndLogicRegressionTests(TestCase):
 		)
 
 		self.assertEqual(response.status_code, 200)
-		self.assertFalse(Tournament.objects.filter(pk=tournament.pk).exists())
+		tournament.refresh_from_db()
+		self.assertEqual(tournament.status, "completed")
 		msgs = [str(m) for m in response.context["messages"]]
-		self.assertTrue(any("deleted" in m.lower() for m in msgs))
+		self.assertTrue(any("archived" in m.lower() for m in msgs))
 
 	def test_non_organizer_cannot_delete_tournament(self):
 		tournament = self._create_tournament(name="Keep Me")
@@ -393,6 +394,48 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(teams_response.context["tournament"].pk, first.pk)
 		self.assertContains(teams_response, "Alpha")
 		self.assertNotContains(teams_response, "Beta")
+
+	def test_home_route_is_public_for_anonymous_users(self):
+		tournament = self._create_tournament(name="Public Main")
+		tournament.status = "active"
+		tournament.save(update_fields=["status"])
+
+		response = self.client.get(reverse("home"))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Tournament Manager")
+		self.assertContains(response, "Login")
+		self.assertEqual(response.context.get("tournament"), tournament)
+
+	def test_public_views_support_tournament_query_selection(self):
+		first = self._create_tournament(name="Public A")
+		second = self._create_tournament(name="Public B")
+
+		response = self.client.get(reverse("public_standings"), {"tournament": second.pk})
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.context["tournament"], second)
+		self.assertEqual(self.client.session.get("selected_tournament_id"), second.pk)
+
+		fixtures_response = self.client.get(reverse("public_fixtures"))
+		self.assertEqual(fixtures_response.status_code, 200)
+		self.assertEqual(fixtures_response.context["tournament"], second)
+
+	def test_remove_team_member_keeps_user_account(self):
+		tournament = self._create_tournament(name="Membership Safety")
+		team = self._create_team(tournament, "Captains")
+		member_user = User.objects.create_user(username="kept_member", password="pass123")
+		TeamMembership.objects.create(team=team, user=member_user, role="member")
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("remove_team_member", kwargs={"pk": team.pk, "user_pk": member_user.pk}),
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertFalse(TeamMembership.objects.filter(team=team, user=member_user).exists())
+		self.assertTrue(User.objects.filter(pk=member_user.pk).exists())
 
 	def test_tournament_form_saves_start_date_and_expected_teams(self):
 		form = TournamentForm(data={

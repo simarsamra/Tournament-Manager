@@ -118,6 +118,22 @@ def _get_tournament(request=None):
             team = _get_team(request.user)
             if team:
                 return team.tournament
+    elif request:
+        # Public pages can switch tournament via query param/session.
+        selected_id = request.GET.get("tournament")
+        if selected_id and tournaments.filter(pk=selected_id).exists():
+            selected = tournaments.get(pk=selected_id)
+            request.session["selected_tournament_id"] = selected.pk
+            return selected
+
+        selected_id = request.session.get("selected_tournament_id")
+        if selected_id and tournaments.filter(pk=selected_id).exists():
+            return tournaments.get(pk=selected_id)
+
+        active_tournament = tournaments.filter(status="active").first()
+        if active_tournament:
+            request.session["selected_tournament_id"] = active_tournament.pk
+            return active_tournament
     return _get_available_tournaments().first()
 
 
@@ -160,6 +176,13 @@ def _tournament_context(request, tournament=None):
     if joinable:
         ctx["joinable_tournaments"] = joinable
     return ctx
+
+
+def _public_tournament_context(tournament=None):
+    return {
+        "public_tournaments": _get_available_tournaments(),
+        "selected_tournament": tournament,
+    }
 
 
 def _get_team(user, tournament=None):
@@ -2522,16 +2545,14 @@ def remove_team_member(request, pk, user_pk):
         messages.error(request, "The captain account cannot be removed.")
         return redirect("team_detail", pk=pk)
     removed_username = membership.user.username
-    member_user = membership.user
     membership.delete()
-    member_user.delete()
     log_action(
         request,
         "team_member_removed",
-        f"Member '{removed_username}' removed from team '{team.name}'",
+        f"Member '{removed_username}' removed from team '{team.name}' (account preserved)",
         tournament=team.tournament,
     )
-    messages.success(request, f"Member '{removed_username}' has been removed.")
+    messages.success(request, f"Member '{removed_username}' has been removed from the team.")
     return redirect("team_detail", pk=pk)
 
 
@@ -3155,29 +3176,13 @@ def delete_tournament(request, pk):
     tournament_name = tournament.name
     if request.session.get("selected_tournament_id") == tournament.pk:
         request.session.pop("selected_tournament_id", None)
-    team_user_ids = list(
-        tournament.teams.exclude(user__is_staff=True).values_list("user_id", flat=True)
-    )
-    tournament.delete()
-    # After the cascade, only delete users who have NO remaining memberships
-    # (i.e. they were solely registered for this tournament and have no other teams).
-    # Users who joined another tournament must be preserved.
-    if team_user_ids:
-        users_still_active = set(
-            TeamMembership.objects.filter(user_id__in=team_user_ids)
-            .values_list("user_id", flat=True)
-            .distinct()
-        )
-        safe_to_delete = [uid for uid in team_user_ids if uid not in users_still_active]
-        if safe_to_delete:
-            User.objects.filter(
-                id__in=safe_to_delete,
-                is_staff=False,
-                is_superuser=False,
-            ).delete()
+    tournament.status = "completed"
+    if tournament.completed_at is None:
+        tournament.completed_at = timezone.now()
+    tournament.save(update_fields=["status", "completed_at"])
 
-    log_action(request, "tournament_deleted", f"Tournament '{tournament_name}' deleted")
-    messages.success(request, f"Tournament '{tournament_name}' deleted.")
+    log_action(request, "tournament_archived", f"Tournament '{tournament_name}' archived")
+    messages.success(request, f"Tournament '{tournament_name}' archived.")
     return redirect("dashboard")
 
 
@@ -3264,12 +3269,32 @@ def delete_user_account(request, user_pk):
 
 # -- Public Views --
 
+def public_home(request):
+    tournament = _get_tournament(request)
+    context = {
+        "tournament": tournament,
+        "standings_snapshot": [],
+        "upcoming_matches": [],
+        **_public_tournament_context(tournament),
+    }
+
+    if tournament:
+        _expire_pending_score_disputes(tournament)
+        if tournament.format in ("round_robin", "double_round_robin"):
+            context["standings_snapshot"] = calculate_standings(tournament)[:5]
+        matches = tournament.matches.select_related("team1", "team2", "court", "winner").order_by(
+            "scheduled_time", "match_number"
+        )
+        context["upcoming_matches"] = list(matches.filter(status__in=["upcoming", "in_progress"])[:8])
+
+    return render(request, "core/public_home.html", context)
+
 def public_standings(request):
     tournament = _get_tournament(request)
     if not tournament:
-        return render(request, "core/public_standings.html", {})
+        return render(request, "core/public_standings.html", _public_tournament_context())
     _expire_pending_score_disputes(tournament)
-    context = {"tournament": tournament}
+    context = {"tournament": tournament, **_public_tournament_context(tournament)}
     if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
         if tournament.format == "hybrid":
             groups = sorted(set(tournament.teams.exclude(group="").values_list("group", flat=True)))
@@ -3287,7 +3312,11 @@ def public_standings(request):
 def public_fixtures(request):
     tournament = _get_tournament(request)
     if not tournament:
-        return render(request, "core/public_fixtures.html", {"matches": []})
+        return render(request, "core/public_fixtures.html", {"matches": [], **_public_tournament_context()})
     _expire_pending_score_disputes(tournament)
     matches = tournament.matches.select_related("team1", "team2", "court", "winner").order_by("scheduled_time", "match_number")
-    return render(request, "core/public_fixtures.html", {"tournament": tournament, "matches": matches})
+    return render(request, "core/public_fixtures.html", {
+        "tournament": tournament,
+        "matches": matches,
+        **_public_tournament_context(tournament),
+    })

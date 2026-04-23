@@ -1,0 +1,99 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tournament Manager</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+</head>
+<body>
+<div class="content" style="max-width:1000px;margin:2rem auto;">
+    <div class="d-flex justify-between align-center mb-2">
+        <h1>Tournament Manager</h1>
+        <div>
+            <a href="{% url 'public_standings' %}{% if selected_tournament %}?tournament={{ selected_tournament.pk }}{% endif %}" class="btn btn-outline">Standings</a>
+            <a href="{% url 'public_fixtures' %}{% if selected_tournament %}?tournament={{ selected_tournament.pk }}{% endif %}" class="btn btn-outline">Fixtures</a>
+            <a href="{% url 'login' %}" class="btn btn-primary">Login</a>
+        </div>
+    </div>
+
+    {% if public_tournaments %}
+    <form method="get" class="card mb-2" style="padding:0.75rem;display:flex;gap:0.75rem;align-items:center;">
+        <label for="public-tournament-switch" class="text-muted" style="font-size:0.9rem;">Tournament</label>
+        <select id="public-tournament-switch" name="tournament" class="form-select" style="max-width:360px;" onchange="this.form.submit()">
+            {% for t in public_tournaments %}
+            <option value="{{ t.pk }}" {% if selected_tournament and selected_tournament.pk == t.pk %}selected{% endif %}>{{ t.name }} • {{ t.get_status_display }}</option>
+            {% endfor %}
+        </select>
+    </form>
+    {% endif %}
+
+    {% if tournament %}
+    <div class="card mb-2">
+        <div class="card-header">Current Tournament</div>
+        <div class="card-body">
+            <div class="d-flex justify-between align-center" style="gap:1rem;flex-wrap:wrap;">
+                <div>
+                    <strong>{{ tournament.name }}</strong>
+                    <div class="text-muted">Status: {{ tournament.get_status_display }}</div>
+                </div>
+                <div>
+                    <a class="btn btn-outline btn-sm" href="{% url 'public_standings' %}?tournament={{ tournament.pk }}">Open Standings</a>
+                    <a class="btn btn-outline btn-sm" href="{% url 'public_fixtures' %}?tournament={{ tournament.pk }}">Open Fixtures</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <div class="card-header">Standings Snapshot</div>
+            <div class="table-container">
+            <table>
+                <thead><tr><th>#</th><th>Team</th><th>Pts</th></tr></thead>
+                <tbody>
+                {% for s in standings_snapshot %}
+                <tr>
+                    <td>{{ s.rank }}</td>
+                    <td>{{ s.team.name }}</td>
+                    <td><strong>{{ s.points }}</strong></td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="text-muted">Standings snapshot is available for round-robin formats.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">Upcoming Matches</div>
+            <div class="table-container">
+            <table>
+                <thead><tr><th>#</th><th>Teams</th><th>Time</th></tr></thead>
+                <tbody>
+                {% for m in upcoming_matches %}
+                <tr>
+                    <td>{{ m.match_number }}</td>
+                    <td>{{ m.team1.name|default:"TBD" }} vs {{ m.team2.name|default:"TBD" }}</td>
+                    <td>{{ m.scheduled_time|date:"M d, H:i"|default:"TBD" }}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="text-muted">No upcoming matches yet.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="card">
+        <div class="card-body">
+            <p class="text-muted" style="margin:0;">No tournaments available yet.</p>
+        </div>
+    </div>
+    {% endif %}
+</div>
+</body>
+</html>
