@@ -1,0 +1,116 @@
+{% extends "core/base.html" %}
+{% block title %}Test Maker{% endblock %}
+{% block page_header %}Test Maker{% endblock %}
+{% block content %}
+<h1 class="page-title">Admin Test Maker</h1>
+
+{% if tournament %}
+<p class="text-muted mb-2">
+    Working tournament: <strong>{{ tournament.name }}</strong>
+    <span class="badge badge-{{ tournament.status }}" style="margin-left:0.4rem;">{{ tournament.get_status_display }}</span>
+</p>
+{% else %}
+<div class="alert alert-warning">No tournament selected. Select or create a tournament first.</div>
+{% endif %}
+
+<div class="grid grid-4 mb-2">
+    <div class="stat-card">
+        <div class="stat-value">{{ total_teams }}</div>
+        <div class="stat-label">Teams</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ total_courts }}</div>
+        <div class="stat-label">Courts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ total_matches }}</div>
+        <div class="stat-label">Matches</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color:var(--warning);">{{ pending_matches }}</div>
+        <div class="stat-label">Non-Terminal Matches</div>
+    </div>
+</div>
+
+<div class="grid grid-2">
+    <div class="card">
+        <div class="card-header">Create Teams + Members</div>
+        <div class="card-body">
+            <p class="text-muted mb-1">Creates N new teams in selected tournament and auto-creates captain/member accounts.</p>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="create_test_teams">
+                <div class="grid grid-2">
+                    <div class="form-group">
+                        <label>Number of teams</label>
+                        <input type="number" name="team_count" class="form-control" min="1" value="10" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Members per team</label>
+                        <input type="number" name="members_per_team" class="form-control" min="1" value="2" required>
+                    </div>
+                </div>
+                <div class="grid grid-2">
+                    <div class="form-group">
+                        <label>Team prefix</label>
+                        <input type="text" name="team_prefix" class="form-control" value="team" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Username prefix</label>
+                        <input type="text" name="username_prefix" class="form-control" value="t" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Default password</label>
+                    <input type="text" name="default_password" class="form-control" value="pass123" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Create Test Teams</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Randomize Court Preferences</div>
+        <div class="card-body">
+            <p class="text-muted mb-1">Assigns random 1-3 preferred courts for every active team in selected tournament.</p>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="randomize_court_preferences">
+                <button type="submit" class="btn btn-primary">Randomize Preferences</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Random Scores (First N Matches)</div>
+        <div class="card-body">
+            <p class="text-muted mb-1">Auto-fills random non-draw scores for the first N eligible matches and marks them confirmed.</p>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="randomize_scores">
+                <div class="form-group">
+                    <label>Number of matches</label>
+                    <input type="number" name="match_count" class="form-control" min="1" value="20" required>
+                </div>
+                <button type="submit" class="btn btn-warning">Apply Random Scores</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">Random Schedule (First N Unscheduled)</div>
+        <div class="card-body">
+            <p class="text-muted mb-1">Assigns times and courts to first N unscheduled matches using default match duration.</p>
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="randomize_schedule">
+                <div class="form-group">
+                    <label>Number of matches</label>
+                    <input type="number" name="schedule_count" class="form-control" min="1" value="20" required>
+                </div>
+                <button type="submit" class="btn btn-outline">Randomize Schedule</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

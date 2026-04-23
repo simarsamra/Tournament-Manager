@@ -85,6 +85,7 @@ urlpatterns = [
 
     # Settings
     path("settings/", views.settings_view, name="settings"),
+    path("testing/", views.test_maker_view, name="test_maker"),
     path("settings/users/<int:user_pk>/organizer/", views.set_user_organizer, name="set_user_organizer"),
     path("settings/users/<int:user_pk>/delete/", views.delete_user_account, name="delete_user_account"),
 

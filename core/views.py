@@ -1,6 +1,7 @@
 """Core views for tournament management."""
 import json
 import os
+import random
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -1552,6 +1553,234 @@ def select_tournament(request):
     request.session["selected_tournament_id"] = tournament.pk
     messages.success(request, f"Now viewing '{tournament.name}'.")
     return redirect(next_url)
+
+
+@login_required
+def test_maker_view(request):
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can access Test Maker.")
+        return redirect("dashboard")
+
+    tournament = _get_tournament(request)
+    if request.method == "POST":
+        if not tournament:
+            messages.error(request, "No tournament selected. Create/select a tournament first.")
+            return redirect("test_maker")
+
+        action = (request.POST.get("action") or "").strip()
+
+        if action == "create_test_teams":
+            team_count_raw = request.POST.get("team_count", "10")
+            members_raw = request.POST.get("members_per_team") or str(tournament.players_per_team or 2)
+            team_prefix = (request.POST.get("team_prefix") or "team").strip() or "team"
+            username_prefix = (request.POST.get("username_prefix") or "t").strip() or "t"
+            default_password = request.POST.get("default_password") or "pass123"
+
+            try:
+                team_count = max(1, int(team_count_raw))
+                members_per_team = max(1, int(members_raw))
+            except ValueError:
+                messages.error(request, "Team count and members per team must be valid numbers.")
+                return redirect("test_maker")
+
+            created_teams = 0
+            created_users = 0
+            created_memberships = 0
+
+            def _next_unique_username(base_username):
+                if not User.objects.filter(username=base_username).exists():
+                    return base_username
+                suffix = 1
+                while User.objects.filter(username=f"{base_username}_{suffix}").exists():
+                    suffix += 1
+                return f"{base_username}_{suffix}"
+
+            for idx in range(1, team_count + 1):
+                team_name = f"{team_prefix}{idx}"
+                if Team.objects.filter(tournament=tournament, name=team_name).exists():
+                    continue
+
+                captain_username = _next_unique_username(f"{username_prefix}{idx}p1")
+                captain = User.objects.create_user(
+                    username=captain_username,
+                    password=default_password,
+                    first_name=team_name,
+                )
+                created_users += 1
+
+                team = Team.objects.create(
+                    user=captain,
+                    tournament=tournament,
+                    name=team_name,
+                )
+                created_teams += 1
+
+                TeamMembership.objects.create(team=team, user=captain, role="captain")
+                created_memberships += 1
+                Player.objects.get_or_create(team=team, name=captain_username)
+
+                for member_idx in range(2, members_per_team + 1):
+                    member_username = _next_unique_username(f"{username_prefix}{idx}p{member_idx}")
+                    member = User.objects.create_user(
+                        username=member_username,
+                        password=default_password,
+                        first_name=team_name,
+                    )
+                    created_users += 1
+                    TeamMembership.objects.create(team=team, user=member, role="member")
+                    created_memberships += 1
+                    Player.objects.get_or_create(team=team, name=member_username)
+
+            log_action(
+                request,
+                "test_maker_create_teams",
+                f"Created {created_teams} team(s), {created_users} user(s), {created_memberships} membership(s)",
+                tournament=tournament,
+            )
+            messages.success(
+                request,
+                f"Test data created: {created_teams} team(s), {created_users} user(s), {created_memberships} membership(s).",
+            )
+
+        elif action == "randomize_court_preferences":
+            teams = list(tournament.teams.filter(status="active").order_by("id"))
+            courts = list(tournament.courts.filter(is_available=True).order_by("id"))
+            if not courts:
+                courts = list(tournament.courts.order_by("id"))
+
+            if not teams:
+                messages.warning(request, "No teams found in selected tournament.")
+                return redirect("test_maker")
+            if not courts:
+                messages.warning(request, "No courts available to assign preferences.")
+                return redirect("test_maker")
+
+            for team in teams:
+                pick_count = random.randint(1, min(3, len(courts)))
+                picked = random.sample(courts, pick_count)
+                team.preferred_courts.set(picked)
+
+            log_action(
+                request,
+                "test_maker_randomize_courts",
+                f"Randomized court preferences for {len(teams)} team(s)",
+                tournament=tournament,
+            )
+            messages.success(request, f"Randomized court preferences for {len(teams)} team(s).")
+
+        elif action == "randomize_scores":
+            limit_raw = request.POST.get("match_count", "10")
+            try:
+                limit = max(1, int(limit_raw))
+            except ValueError:
+                messages.error(request, "Match count must be a valid number.")
+                return redirect("test_maker")
+
+            terminal_statuses = ["confirmed", "forfeited", "cancelled", "bye"]
+            matches = list(
+                tournament.matches.filter(team1__isnull=False, team2__isnull=False)
+                .exclude(status__in=terminal_statuses)
+                .order_by("match_number", "id")[:limit]
+            )
+
+            if not matches:
+                messages.warning(request, "No eligible matches found for score randomization.")
+                return redirect("test_maker")
+
+            updated = 0
+            for match in matches:
+                s1 = random.randint(0, 5)
+                s2 = random.randint(0, 5)
+                if s1 == s2:
+                    if random.random() < 0.5:
+                        s1 += 1
+                    else:
+                        s2 += 1
+
+                match.score_team1 = s1
+                match.score_team2 = s2
+                match.winner = match.team1 if s1 > s2 else match.team2
+                match.status = "confirmed"
+                match.submitted_by = match.team1
+                match.confirmed_by = match.team2
+                match.save(update_fields=[
+                    "score_team1", "score_team2", "winner", "status", "submitted_by", "confirmed_by"
+                ])
+                advance_winner(match)
+                updated += 1
+
+            log_action(
+                request,
+                "test_maker_randomize_scores",
+                f"Randomized and confirmed scores for {updated} match(es)",
+                tournament=tournament,
+            )
+            messages.success(request, f"Randomized and confirmed scores for {updated} match(es).")
+
+        elif action == "randomize_schedule":
+            limit_raw = request.POST.get("schedule_count", "20")
+            try:
+                limit = max(1, int(limit_raw))
+            except ValueError:
+                messages.error(request, "Schedule count must be a valid number.")
+                return redirect("test_maker")
+
+            courts = list(tournament.courts.filter(is_available=True).order_by("id"))
+            if not courts:
+                courts = list(tournament.courts.order_by("id"))
+            if not courts:
+                messages.warning(request, "No courts found. Add courts before random scheduling.")
+                return redirect("test_maker")
+
+            matches = list(
+                tournament.matches.filter(team1__isnull=False, team2__isnull=False, scheduled_time__isnull=True)
+                .exclude(status__in=["confirmed", "forfeited", "cancelled", "bye"])
+                .order_by("match_number", "id")[:limit]
+            )
+            if not matches:
+                messages.warning(request, "No unscheduled eligible matches found.")
+                return redirect("test_maker")
+
+            duration_minutes = max(5, int(tournament.default_match_duration or 30))
+            start_at = timezone.now().replace(second=0, microsecond=0) + timedelta(hours=1)
+
+            updated = 0
+            for idx, match in enumerate(matches):
+                slot_start = start_at + timedelta(minutes=idx * duration_minutes)
+                slot_end = slot_start + timedelta(minutes=duration_minutes)
+                match.scheduled_time = slot_start
+                match.scheduled_end_time = slot_end
+                match.court = courts[idx % len(courts)]
+                if match.status not in ["in_progress", "pending_confirmation"]:
+                    match.status = "upcoming"
+                match.save(update_fields=["scheduled_time", "scheduled_end_time", "court", "status"])
+                updated += 1
+
+            log_action(
+                request,
+                "test_maker_randomize_schedule",
+                f"Randomly scheduled {updated} match(es)",
+                tournament=tournament,
+            )
+            messages.success(request, f"Randomly scheduled {updated} match(es).")
+
+        else:
+            messages.error(request, "Unknown Test Maker action.")
+
+        return redirect("test_maker")
+
+    context = {
+        "tournament": tournament,
+        "total_teams": tournament.teams.count() if tournament else 0,
+        "total_courts": tournament.courts.count() if tournament else 0,
+        "total_matches": tournament.matches.count() if tournament else 0,
+        "pending_matches": (
+            tournament.matches.exclude(status__in=["confirmed", "forfeited", "cancelled", "bye"]).count()
+            if tournament else 0
+        ),
+        **_tournament_context(request, tournament),
+    }
+    return render(request, "core/test_maker.html", context)
 
 
 # -- Fixtures --
