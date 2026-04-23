@@ -8,6 +8,12 @@
         {% if is_captain or is_organizer %}
         <a href="{% url 'team_preferences' pk=team.pk %}" class="btn btn-outline">Preferences</a>
         {% endif %}
+        {% if is_member and not is_captain %}
+        <form method="post" action="{% url 'leave_team' pk=team.pk %}" style="display:inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-outline btn-sm" onclick="return confirm('Leave {{ team.name }}? Your account will not be deleted.')">Leave Team</button>
+        </form>
+        {% endif %}
         {% if team.status == "active" and is_captain or team.status == "active" and is_organizer %}
         <form method="post" action="{% url 'withdraw_team' pk=team.pk %}" style="display:inline">
             {% csrf_token %}
@@ -77,7 +83,7 @@
                     <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;">
                         <form method="post" action="{% url 'remove_team_member' pk=team.pk user_pk=m.user.pk %}" style="display:inline;">
                             {% csrf_token %}
-                            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Remove {{ m.user.username }} from the team? Their account will be deleted.')">Remove</button>
+                            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Remove {{ m.user.username }} from the team? They will be removed from the team but their account will not be deleted.')">Remove</button>
                         </form>
                         <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('reset-pw-{{ m.user.pk }}').style.display=document.getElementById('reset-pw-{{ m.user.pk }}').style.display==='none'?'block':'none'">Reset PW</button>
                     </div>
@@ -103,11 +109,20 @@
         </div>
     </div>
     {% if invite_form %}
-    <div style="padding:1rem;border-top:1px solid var(--border);{% if members_full %}opacity:0.5;pointer-events:none;{% endif %}">
+    <div style="padding:1rem;border-top:1px solid var(--border);">
+        <h4 style="margin-bottom:0.75rem;font-size:0.9rem;">Add Existing Account</h4>
+        <form method="post" action="{% url 'manage_team_members' pk=team.pk %}" style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap;margin-bottom:1rem;">
+            {% csrf_token %}
+            <div class="form-group" style="margin-bottom:0;">
+                <label style="font-size:0.8rem;">Username of existing account</label>
+                <input type="text" name="existing_username" class="form-control" placeholder="Enter existing username" {% if members_full %}disabled{% endif %}>
+            </div>
+            <button type="submit" class="btn btn-outline btn-sm" {% if members_full %}disabled{% endif %}>Add by Username</button>
+        </form>
         {% if members_full %}
         <p style="margin:0 0 0.5rem;color:var(--text-muted);font-size:0.85rem;">&#128274; Team is at full capacity ({{ max_members }} member{{ max_members|pluralize }}).</p>
         {% endif %}
-        <h4 style="margin-bottom:0.75rem;font-size:0.9rem;">Add Member Account</h4>
+        <h4 style="margin-bottom:0.75rem;font-size:0.9rem;">Create New Member Account</h4>
         <form method="post" action="{% url 'manage_team_members' pk=team.pk %}">
             {% csrf_token %}
             <div class="grid grid-3" style="gap:0.6rem;margin-bottom:0.6rem;">
@@ -124,8 +139,31 @@
                     {{ invite_form.password_confirm }}
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary btn-sm" {% if members_full %}disabled{% endif %}>Add Member</button>
+            <button type="submit" class="btn btn-primary btn-sm" {% if members_full %}disabled{% endif %}>Create &amp; Add Member</button>
         </form>
+    </div>
+    {% endif %}
+    {% if is_captain or is_organizer %}
+    <div style="padding:1rem;border-top:1px solid var(--border);">
+        <h4 style="margin-bottom:0.75rem;font-size:0.9rem;">Transfer Captain Role</h4>
+        {% if memberships|length > 1 %}
+        <form method="post" action="{% url 'transfer_captain' pk=team.pk %}" style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap;">
+            {% csrf_token %}
+            <div class="form-group" style="margin-bottom:0;">
+                <label style="font-size:0.8rem;">Promote to Captain</label>
+                <select name="new_captain_user_pk" class="form-select" style="min-width:160px;">
+                    {% for m in memberships %}
+                    {% if m.role != 'captain' %}
+                    <option value="{{ m.user.pk }}">{{ m.user.username }}</option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn btn-outline btn-sm" onclick="return confirm('Transfer captain role? You will become a regular member.')">Transfer Captain</button>
+        </form>
+        {% else %}
+        <p class="text-muted" style="font-size:0.85rem;">No other members to transfer captain role to.</p>
+        {% endif %}
     </div>
     {% endif %}
 </div>

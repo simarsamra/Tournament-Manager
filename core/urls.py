@@ -18,7 +18,7 @@ urlpatterns = [
 
     # Dashboard
     path("dashboard/", views.dashboard_view, name="dashboard"),
-    path("", views.dashboard_view, name="home"),
+    path("", views.public_home, name="home"),
     path("toggle-view/", views.toggle_view_preference, name="toggle_view_preference"),
 
     # Tournament setup
@@ -64,6 +64,8 @@ urlpatterns = [
     path("team/<int:pk>/members/<int:user_pk>/remove/", views.remove_team_member, name="remove_team_member"),
     path("team/<int:pk>/members/<int:user_pk>/reset-password/", views.reset_member_password, name="reset_member_password"),
     path("team/<int:pk>/captain/reset-password/", views.reset_captain_password, name="reset_captain_password"),
+    path("team/<int:pk>/leave/", views.leave_team, name="leave_team"),
+    path("team/<int:pk>/transfer-captain/", views.transfer_captain, name="transfer_captain"),
 
     # Standings
     path("standings/", views.standings_view, name="standings"),

@@ -123,13 +123,28 @@
     </div>
 </div>
 {% else %}
-<div class="content" style="max-width: 500px; margin: 4rem auto; padding: 2rem;">
-    {% if messages %}
-    {% for message in messages %}
-    <div class="alert alert-{{ message.tags }}">{{ message }}</div>
-    {% endfor %}
-    {% endif %}
-    {% block public_content %}{% endblock %}
+<div class="app-layout">
+    <div class="main-content" style="margin-left:0;">
+        <header class="topbar">
+            <div class="topbar-left">
+                <a href="{% url 'home' %}" style="font-weight:600;font-size:1rem;text-decoration:none;color:inherit;">🏆 Tournament Manager</a>
+            </div>
+            <div class="topbar-right">
+                <a href="{% url 'public_standings' %}" class="btn btn-outline btn-sm">Standings</a>
+                <a href="{% url 'public_fixtures' %}" class="btn btn-outline btn-sm">Fixtures</a>
+                <a href="{% url 'account_register' %}" class="btn btn-outline btn-sm">Register</a>
+                <a href="{% url 'login' %}" class="btn btn-primary btn-sm">Login</a>
+            </div>
+        </header>
+        <div class="content">
+            {% if messages %}
+            {% for message in messages %}
+            <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+            {% endfor %}
+            {% endif %}
+            {% block public_content %}{% endblock %}
+        </div>
+    </div>
 </div>
 {% endif %}
 <script src="{% static 'js/app.js' %}?v={% now 'YmdHis' %}"></script>

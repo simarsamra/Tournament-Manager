@@ -1,0 +1,135 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tournament Manager</title>
+    <script>!function(){var t=localStorage.getItem('tm-theme');if(t)document.documentElement.setAttribute('data-theme',t);}();</script>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}?v={% now 'YmdHis' %}">
+</head>
+<body>
+<div class="app-layout">
+    <div class="main-content" style="margin-left:0;">
+        <header class="topbar">
+            <div class="topbar-left">
+                <span style="font-weight:600;font-size:1rem;">🏆 Tournament Manager</span>
+            </div>
+            <div class="topbar-right">
+                {% if all_tournaments %}
+                <form method="get" action="" style="display:flex;align-items:center;gap:0.5rem;">
+                    <label class="text-muted" style="font-size:0.85rem;">Tournament</label>
+                    <select name="tournament_id" class="form-select" onchange="this.form.submit()" style="min-width:200px;">
+                        {% for t in all_tournaments %}
+                        <option value="{{ t.pk }}" {% if tournament and t.pk == tournament.pk %}selected{% endif %}>
+                            {{ t.name }} &bull; {{ t.get_status_display }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </form>
+                {% endif %}
+                <a href="{% url 'login' %}" class="btn btn-primary btn-sm">Login</a>
+                <a href="{% url 'account_register' %}" class="btn btn-outline btn-sm">Register</a>
+            </div>
+        </header>
+        <div class="content">
+            {% if not tournament %}
+            <div style="text-align:center;padding:4rem 2rem;">
+                <h1 style="font-size:2rem;margin-bottom:1rem;">Welcome to Tournament Manager</h1>
+                <p class="text-muted" style="font-size:1.1rem;margin-bottom:2rem;">No tournaments are currently active. Check back soon or register to participate.</p>
+                <a href="{% url 'account_register' %}" class="btn btn-primary">Create an Account</a>
+                <a href="{% url 'login' %}" class="btn btn-outline" style="margin-left:1rem;">Login</a>
+            </div>
+            {% else %}
+            <div style="padding:1rem 0;">
+                <div class="d-flex justify-between align-center mb-2" style="flex-wrap:wrap;gap:1rem;">
+                    <div>
+                        <h1 class="page-title" style="margin-bottom:0.25rem;">{{ tournament.name }}</h1>
+                        <span class="badge badge-{{ tournament.status }}">{{ tournament.get_status_display }}</span>
+                        {% if tournament.sport_type %}
+                        <span class="text-muted" style="margin-left:0.5rem;font-size:0.85rem;">{{ tournament.get_sport_type_display }}</span>
+                        {% endif %}
+                    </div>
+                    <div style="display:flex;gap:0.75rem;">
+                        <a href="{% url 'public_standings' %}" class="btn btn-outline btn-sm">🏆 Standings</a>
+                        <a href="{% url 'public_fixtures' %}" class="btn btn-outline btn-sm">📋 Fixtures</a>
+                        <a href="{% url 'login' %}" class="btn btn-primary btn-sm">Login to Participate</a>
+                    </div>
+                </div>
+
+                <div class="grid grid-2 mb-2" style="gap:1rem;">
+                    {% if standings %}
+                    <div class="card">
+                        <div class="card-header">🏆 Top Standings</div>
+                        <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>L</th><th>Pts</th></tr>
+                            </thead>
+                            <tbody>
+                            {% for s in standings %}
+                            <tr>
+                                <td>{{ s.rank }}</td>
+                                <td><strong>{{ s.team.name }}</strong></td>
+                                <td>{{ s.played }}</td>
+                                <td class="text-success">{{ s.wins }}</td>
+                                <td class="text-danger">{{ s.losses }}</td>
+                                <td><strong>{{ s.points }}</strong></td>
+                            </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                        </div>
+                        <div style="padding:0.75rem;text-align:right;">
+                            <a href="{% url 'public_standings' %}" class="btn btn-outline btn-sm">Full Standings →</a>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if upcoming_matches %}
+                    <div class="card">
+                        <div class="card-header">📅 Upcoming Matches</div>
+                        <div class="card-body" style="padding:0;">
+                        {% for match in upcoming_matches %}
+                        <div style="padding:0.75rem 1rem;{% if not forloop.last %}border-bottom:1px solid var(--border);{% endif %}">
+                            <div style="font-weight:600;margin-bottom:0.25rem;">
+                                {{ match.team1.name|default:"TBD" }} <span class="text-muted">vs</span> {{ match.team2.name|default:"TBD" }}
+                            </div>
+                            <div class="text-muted" style="font-size:0.8rem;">
+                                {% if match.scheduled_time %}{{ match.scheduled_time|date:"D, M j · H:i" }}{% else %}Time TBD{% endif %}
+                                {% if match.court %} &bull; {{ match.court.name }}{% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                        </div>
+                        <div style="padding:0.75rem;text-align:right;">
+                            <a href="{% url 'public_fixtures' %}" class="btn btn-outline btn-sm">Full Schedule →</a>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    {% if not standings and not upcoming_matches %}
+                    <div class="card" style="grid-column:1/-1;">
+                        <div class="card-body" style="text-align:center;padding:2rem;">
+                            <p class="text-muted">No match data available yet. Check back once the tournament begins.</p>
+                            <a href="{% url 'login' %}" class="btn btn-primary" style="margin-top:1rem;">Login to Register</a>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                <div class="card">
+                    <div class="card-body" style="text-align:center;padding:1.5rem;">
+                        <p style="margin-bottom:1rem;">Want to join the tournament? Create an account or log in to register your team.</p>
+                        <a href="{% url 'account_register' %}" class="btn btn-primary">Create Account &amp; Join</a>
+                        <a href="{% url 'login' %}" class="btn btn-outline" style="margin-left:1rem;">Already have an account? Login</a>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+<script src="{% static 'js/app.js' %}?v={% now 'YmdHis' %}"></script>
+</body>
+</html>

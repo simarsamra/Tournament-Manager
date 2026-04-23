@@ -2387,6 +2387,7 @@ def team_detail(request, pk):
     is_organizer = _is_organizer(request.user)
     is_own_team = _get_team(request.user) == team
     is_captain = _is_captain(request.user, team)
+    is_member = team.memberships.filter(user=request.user).exists() if request.user.is_authenticated else False
     memberships = team.memberships.select_related("user").order_by("role", "joined_at")
     max_members = tournament.players_per_team if tournament else None
     members_full = max_members is not None and memberships.count() >= max_members
@@ -2396,6 +2397,7 @@ def team_detail(request, pk):
         "is_organizer": is_organizer,
         "is_own_team": is_own_team,
         "is_captain": is_captain,
+        "is_member": is_member,
         "memberships": memberships,
         "members_full": members_full,
         "max_members": max_members,
@@ -2417,6 +2419,27 @@ def manage_team_members(request, pk):
         messages.error(request, f"Team is already at the maximum of {max_members} member(s).")
         return redirect("team_detail", pk=pk)
     if request.method == "POST":
+        existing_username = request.POST.get("existing_username", "").strip()
+        if existing_username:
+            # Add an existing account to the team
+            try:
+                existing_user = User.objects.get(username=existing_username)
+            except User.DoesNotExist:
+                messages.error(request, f"No account found with username '{existing_username}'.")
+                return redirect("team_detail", pk=pk)
+            if team.memberships.filter(user=existing_user).exists():
+                messages.error(request, f"'{existing_username}' is already a member of this team.")
+                return redirect("team_detail", pk=pk)
+            TeamMembership.objects.create(team=team, user=existing_user, role="member")
+            log_action(
+                request,
+                "team_member_added",
+                f"Existing user '{existing_username}' added to team '{team.name}'",
+                tournament=team.tournament,
+            )
+            messages.success(request, f"'{existing_username}' has been added to {team.name}.")
+            return redirect("team_detail", pk=pk)
+
         form = TeamMemberInviteForm(request.POST)
         if form.is_valid():
             new_user = User.objects.create_user(
@@ -3281,8 +3304,14 @@ def public_home(request):
         return redirect("dashboard")
 
     all_tournaments = _get_available_tournaments().exclude(status="archived")
-    active_tournament = all_tournaments.filter(status="active").first()
-    tournament = active_tournament or all_tournaments.first()
+
+    # Allow switching tournament via GET param
+    tournament_id = request.GET.get("tournament_id")
+    tournament = None
+    if tournament_id:
+        tournament = all_tournaments.filter(pk=tournament_id).first()
+    if not tournament:
+        tournament = all_tournaments.filter(status="active").first() or all_tournaments.first()
 
     standings = None
     upcoming_matches = []

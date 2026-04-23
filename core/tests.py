@@ -2658,3 +2658,141 @@ class ScoreDisputeWindowTests(TestCase):
 		match.refresh_from_db()
 		self.assertEqual(match.status, "confirmed")
 		self.assertEqual(match.dispute_resolution_notes, "Video review and scorecards verified.")
+
+
+
+class Phase1Phase2BehaviorTests(TestCase):
+	"""Tests for Phase 1 (kick fix, public home, leave/transfer) and Phase 2 (archive)."""
+
+	def setUp(self):
+		self.organizer = User.objects.create_user(
+			username="org_p1p2", password="pass", is_staff=True
+		)
+		self.tournament = Tournament.objects.create(
+			name="T-Phase1", format="round_robin", sport_type="table_tennis",
+			points_per_win=3, points_per_loss=0, points_per_draw=1,
+			teams_per_group_advance=1, num_groups=2, default_match_duration=30,
+			players_per_team=5,
+		)
+
+	def _create_team_with_captain(self, team_name, username):
+		user = User.objects.create_user(username=username, password="pass")
+		team = Team.objects.create(user=user, tournament=self.tournament, name=team_name)
+		TeamMembership.objects.create(team=team, user=user, role="captain")
+		return team, user
+
+	def test_public_home_loads_without_login(self):
+		"""GET / returns 200 for unauthenticated users."""
+		response = self.client.get(reverse("home"))
+		self.assertEqual(response.status_code, 200)
+
+	def test_public_home_redirects_authenticated_to_dashboard(self):
+		"""Authenticated users hitting / are redirected to /dashboard/."""
+		self.client.force_login(self.organizer)
+		response = self.client.get(reverse("home"))
+		self.assertRedirects(response, reverse("dashboard"), fetch_redirect_response=False)
+
+	def test_kick_member_does_not_delete_user_account(self):
+		"""Removing a member from a team must NOT delete their user account."""
+		team, captain = self._create_team_with_captain("Alpha", "alpha_cap_p1")
+		member_user = User.objects.create_user(username="alpha_mem_p1", password="pass")
+		TeamMembership.objects.create(team=team, user=member_user, role="member")
+		member_pk = member_user.pk
+
+		self.client.force_login(captain)
+		self.client.post(
+			reverse("remove_team_member", kwargs={"pk": team.pk, "user_pk": member_user.pk}),
+			follow=True,
+		)
+		# Membership gone
+		self.assertFalse(TeamMembership.objects.filter(team=team, user_id=member_pk).exists())
+		# User account still exists
+		self.assertTrue(User.objects.filter(pk=member_pk).exists())
+
+	def test_archive_tournament_preserves_data(self):
+		"""Archiving a tournament sets status=archived and does NOT delete teams or users."""
+		team, captain = self._create_team_with_captain("Beta", "beta_cap_p2")
+		team_pk = team.pk
+		captain_pk = captain.pk
+		self.tournament.status = "active"
+		self.tournament.save(update_fields=["status"])
+
+		self.client.force_login(self.organizer)
+		self.client.post(
+			reverse("delete_tournament", kwargs={"pk": self.tournament.pk}),
+			{"confirm_delete": "ARCHIVE"},
+			follow=True,
+		)
+		self.tournament.refresh_from_db()
+		self.assertEqual(self.tournament.status, "archived")
+		# Team and captain user still exist
+		self.assertTrue(Team.objects.filter(pk=team_pk).exists())
+		self.assertTrue(User.objects.filter(pk=captain_pk).exists())
+
+	def test_archive_requires_confirmation(self):
+		"""Attempting to archive without the confirm string shows an error."""
+		self.client.force_login(self.organizer)
+		self.client.post(
+			reverse("delete_tournament", kwargs={"pk": self.tournament.pk}),
+			{"confirm_delete": ""},
+			follow=True,
+		)
+		self.tournament.refresh_from_db()
+		self.assertNotEqual(self.tournament.status, "archived")
+
+	def test_leave_team_removes_membership_not_user(self):
+		"""A member can leave a team; their account stays intact."""
+		team, captain = self._create_team_with_captain("Gamma", "gamma_cap_p1")
+		member_user = User.objects.create_user(username="gamma_mem_p1", password="pass")
+		TeamMembership.objects.create(team=team, user=member_user, role="member")
+		member_pk = member_user.pk
+
+		self.client.force_login(member_user)
+		self.client.post(
+			reverse("leave_team", kwargs={"pk": team.pk}),
+			follow=True,
+		)
+		self.assertFalse(TeamMembership.objects.filter(team=team, user_id=member_pk).exists())
+		self.assertTrue(User.objects.filter(pk=member_pk).exists())
+
+	def test_sole_captain_cannot_leave_without_transfer(self):
+		"""Sole captain cannot leave without first transferring the captain role."""
+		team, captain = self._create_team_with_captain("Delta", "delta_cap_p1")
+
+		self.client.force_login(captain)
+		self.client.post(
+			reverse("leave_team", kwargs={"pk": team.pk}),
+			follow=True,
+		)
+		# Membership still exists — leave was blocked
+		self.assertTrue(TeamMembership.objects.filter(team=team, user=captain).exists())
+
+	def test_transfer_captain_promotes_member(self):
+		"""Transferring captain promotes the target and demotes old captain."""
+		team, captain = self._create_team_with_captain("Epsilon", "eps_cap_p1")
+		member_user = User.objects.create_user(username="eps_mem_p1", password="pass")
+		TeamMembership.objects.create(team=team, user=member_user, role="member")
+
+		self.client.force_login(captain)
+		self.client.post(
+			reverse("transfer_captain", kwargs={"pk": team.pk}),
+			{"new_captain_user_pk": member_user.pk},
+			follow=True,
+		)
+		new_cap_membership = TeamMembership.objects.get(team=team, user=member_user)
+		old_cap_membership = TeamMembership.objects.get(team=team, user=captain)
+		self.assertEqual(new_cap_membership.role, "captain")
+		self.assertEqual(old_cap_membership.role, "member")
+
+	def test_add_existing_user_by_username(self):
+		"""Captain can add an existing account to a team by username."""
+		team, captain = self._create_team_with_captain("Zeta", "zeta_cap_p1")
+		existing_user = User.objects.create_user(username="zeta_existing_p1", password="pass")
+
+		self.client.force_login(captain)
+		self.client.post(
+			reverse("manage_team_members", kwargs={"pk": team.pk}),
+			{"existing_username": "zeta_existing_p1"},
+			follow=True,
+		)
+		self.assertTrue(TeamMembership.objects.filter(team=team, user=existing_user).exists())
