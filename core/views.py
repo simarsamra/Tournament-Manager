@@ -2522,16 +2522,14 @@ def remove_team_member(request, pk, user_pk):
         messages.error(request, "The captain account cannot be removed.")
         return redirect("team_detail", pk=pk)
     removed_username = membership.user.username
-    member_user = membership.user
     membership.delete()
-    member_user.delete()
     log_action(
         request,
         "team_member_removed",
         f"Member '{removed_username}' removed from team '{team.name}'",
         tournament=team.tournament,
     )
-    messages.success(request, f"Member '{removed_username}' has been removed.")
+    messages.success(request, f"Member '{removed_username}' has been removed from the team.")
     return redirect("team_detail", pk=pk)
 
 
@@ -3144,40 +3142,24 @@ def audit_log_view(request):
 @require_POST
 def delete_tournament(request, pk):
     if not _is_organizer(request.user):
-        messages.error(request, "Only organizers can delete tournaments.")
+        messages.error(request, "Only organizers can archive tournaments.")
         return redirect("dashboard")
 
     tournament = get_object_or_404(Tournament, pk=pk)
-    if request.POST.get("confirm_delete", "").strip().upper() != "DELETE":
-        messages.error(request, "Tournament deletion was not confirmed.")
+    confirm = request.POST.get("confirm_delete", "").strip().upper()
+    if confirm not in ("DELETE", "ARCHIVE"):
+        messages.error(request, "Tournament archival was not confirmed.")
         return redirect("settings")
 
     tournament_name = tournament.name
     if request.session.get("selected_tournament_id") == tournament.pk:
         request.session.pop("selected_tournament_id", None)
-    team_user_ids = list(
-        tournament.teams.exclude(user__is_staff=True).values_list("user_id", flat=True)
-    )
-    tournament.delete()
-    # After the cascade, only delete users who have NO remaining memberships
-    # (i.e. they were solely registered for this tournament and have no other teams).
-    # Users who joined another tournament must be preserved.
-    if team_user_ids:
-        users_still_active = set(
-            TeamMembership.objects.filter(user_id__in=team_user_ids)
-            .values_list("user_id", flat=True)
-            .distinct()
-        )
-        safe_to_delete = [uid for uid in team_user_ids if uid not in users_still_active]
-        if safe_to_delete:
-            User.objects.filter(
-                id__in=safe_to_delete,
-                is_staff=False,
-                is_superuser=False,
-            ).delete()
 
-    log_action(request, "tournament_deleted", f"Tournament '{tournament_name}' deleted")
-    messages.success(request, f"Tournament '{tournament_name}' deleted.")
+    tournament.status = "archived"
+    tournament.save(update_fields=["status"])
+
+    log_action(request, "tournament_archived", f"Tournament '{tournament_name}' archived")
+    messages.success(request, f"Tournament '{tournament_name}' has been archived. Teams and accounts are preserved.")
     return redirect("dashboard")
 
 
@@ -3291,3 +3273,107 @@ def public_fixtures(request):
     _expire_pending_score_disputes(tournament)
     matches = tournament.matches.select_related("team1", "team2", "court", "winner").order_by("scheduled_time", "match_number")
     return render(request, "core/public_fixtures.html", {"tournament": tournament, "matches": matches})
+
+
+def public_home(request):
+    """Public landing page — no login required."""
+    if request.user.is_authenticated:
+        return redirect("dashboard")
+
+    all_tournaments = _get_available_tournaments().exclude(status="archived")
+    active_tournament = all_tournaments.filter(status="active").first()
+    tournament = active_tournament or all_tournaments.first()
+
+    standings = None
+    upcoming_matches = []
+    if tournament:
+        if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
+            try:
+                standings = calculate_standings(tournament)[:5]
+            except Exception:
+                standings = None
+        upcoming_matches = list(
+            tournament.matches.filter(status__in=["upcoming", "in_progress"])
+            .select_related("team1", "team2", "court")
+            .order_by("scheduled_time", "match_number")[:5]
+        )
+
+    return render(request, "core/home.html", {
+        "tournament": tournament,
+        "all_tournaments": all_tournaments,
+        "standings": standings,
+        "upcoming_matches": upcoming_matches,
+    })
+
+
+@login_required
+@require_POST
+def leave_team(request, pk):
+    """Allow a team member to leave their team without deleting their account."""
+    team = get_object_or_404(Team, pk=pk)
+    membership = get_object_or_404(TeamMembership, team=team, user=request.user)
+
+    if membership.role == "captain":
+        other_captains = team.memberships.filter(role="captain").exclude(user=request.user)
+        if not other_captains.exists():
+            messages.error(
+                request,
+                "You are the only captain. Transfer the captain role to another member before leaving.",
+            )
+            return redirect("team_detail", pk=pk)
+
+    team_name = team.name
+    membership.delete()
+    log_action(
+        request,
+        "team_left",
+        f"User '{request.user.username}' left team '{team_name}'",
+        tournament=team.tournament,
+    )
+    messages.success(request, f"You have left {team_name}.")
+    return redirect("dashboard")
+
+
+@login_required
+@require_POST
+def transfer_captain(request, pk):
+    """Transfer the captain role to another team member."""
+    team = get_object_or_404(Team, pk=pk)
+    is_organizer = _is_organizer(request.user)
+    if not is_organizer and not _is_captain(request.user, team):
+        messages.error(request, "Only the team captain or an organizer can transfer the captain role.")
+        return redirect("team_detail", pk=pk)
+
+    new_captain_pk = request.POST.get("new_captain_user_pk")
+    if not new_captain_pk:
+        messages.error(request, "No member selected for captain transfer.")
+        return redirect("team_detail", pk=pk)
+
+    new_captain_membership = get_object_or_404(TeamMembership, team=team, user_id=new_captain_pk)
+    if new_captain_membership.role == "captain":
+        messages.error(request, "That member is already a captain.")
+        return redirect("team_detail", pk=pk)
+
+    # Promote new captain
+    new_captain_membership.role = "captain"
+    new_captain_membership.save(update_fields=["role"])
+
+    # Update Team.user to reflect new captain
+    team.user = new_captain_membership.user
+    team.save(update_fields=["user"])
+
+    # Demote old captain to member (if current user is the captain, not an organizer overriding)
+    if not is_organizer:
+        old_membership = team.memberships.filter(user=request.user).first()
+        if old_membership and old_membership.role == "captain":
+            old_membership.role = "member"
+            old_membership.save(update_fields=["role"])
+
+    log_action(
+        request,
+        "captain_transferred",
+        f"Captain of '{team.name}' transferred to '{new_captain_membership.user.username}'",
+        tournament=team.tournament,
+    )
+    messages.success(request, f"Captain role transferred to {new_captain_membership.user.username}.")
+    return redirect("team_detail", pk=pk)

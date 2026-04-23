@@ -46,6 +46,7 @@ class Tournament(models.Model):
             ("scheduled", "Schedule Draft Ready"),
             ("active", "Active"),
             ("completed", "Completed"),
+            ("archived", "Archived"),
         ],
         default="setup",
     )
