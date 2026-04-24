@@ -17,7 +17,21 @@
             {% for field in form %}
             <div class="form-group">
                 <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                {% if field.html_name == "end_date" %}
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                    {{ field }}
+                    {% if not is_settings_locked and tournament %}
+                    <form method="post" action="{% url 'compute_end_date' pk=tournament.pk %}" style="margin:0;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-secondary" title="Auto-calculate end date from match count, courts, and match duration">
+                            Compute
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
+                {% else %}
                 {{ field }}
+                {% endif %}
                 {% if field.help_text %}<small class="text-muted">{{ field.help_text }}</small>{% endif %}
             </div>
             {% endfor %}

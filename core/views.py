@@ -2147,6 +2147,9 @@ def submit_score(request, pk):
     if not is_organizer and not is_participant:
         messages.error(request, "You are not a participant in this match.")
         return redirect("match_detail", pk=pk)
+    if match.tournament.status not in ("active",):
+        messages.error(request, "Scores can only be submitted once the tournament has started.")
+        return redirect("match_detail", pk=pk)
     if match.tournament.status == "completed":
         messages.error(request, "This tournament has already been completed.")
         return redirect("match_detail", pk=pk)
@@ -2418,6 +2421,9 @@ def request_reschedule(request, pk):
         return redirect("match_detail", pk=pk)
     if not _is_captain(request.user, team) and not _is_organizer(request.user):
         messages.error(request, "Only the team captain can request rescheduling.")
+        return redirect("match_detail", pk=pk)
+    if match.tournament.status != "active":
+        messages.error(request, "Rescheduling is not available until the tournament has started.")
         return redirect("match_detail", pk=pk)
     if match.status not in ("upcoming",):
         messages.error(request, "Only upcoming matches can be rescheduled.")
@@ -3499,6 +3505,23 @@ def settings_view(request):
         "users": User.objects.filter(is_superuser=False).order_by("username"),
         **_tournament_context(request, tournament),
     })
+
+
+@login_required
+@require_POST
+def compute_end_date_view(request, pk):
+    """Compute and save an auto end date for the tournament, then redirect back to settings."""
+    if not _is_organizer(request.user):
+        return redirect("dashboard")
+    tournament = get_object_or_404(Tournament, pk=pk)
+    computed = _auto_end_date(tournament)
+    if computed:
+        tournament.end_date = computed
+        tournament.save(update_fields=["end_date"])
+        messages.success(request, f"End date computed and set to {computed.strftime('%B %d, %Y')}.")
+    else:
+        messages.error(request, "Could not compute end date — make sure a start date is set.")
+    return redirect("settings")
 
 
 # -- User Management --

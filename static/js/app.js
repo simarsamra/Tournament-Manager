@@ -154,7 +154,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .then(function(html) {
                     if (html && section.isConnected) {
-                        section.innerHTML = html;
+                        // Flicker-free swap: only replace when new content is ready.
+                        // Build off-screen, then do a single atomic innerHTML assignment
+                        // so there is never a blank frame between old and new content.
+                        const trimmed = html.trim();
+                        if (trimmed && trimmed !== section.innerHTML.trim()) {
+                            section.innerHTML = trimmed;
+                        }
                     }
                 })
                 .catch(function() {
