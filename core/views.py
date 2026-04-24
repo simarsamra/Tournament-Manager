@@ -26,7 +26,7 @@ from .models import (
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
-    AccountRegistrationForm, CreateTeamForm,
+    AccountRegistrationForm, CreateTeamForm, StandaloneTeamForm,
     ScoreSubmitForm, RescheduleForm, TeamPreferencesForm, BulkTeamForm,
     BulkTeamFileForm, CourtAvailabilityForm, TeamMemberInviteForm,
 )
@@ -244,6 +244,16 @@ def _is_partial_refresh(request):
         request.GET.get("partial") == "1"
         and request.headers.get("x-requested-with", "").lower() == "xmlhttprequest"
     )
+
+
+def _resolve_individual_team_name(user, requested_name=""):
+    raw = (requested_name or "").strip()
+    if raw:
+        return raw
+    display_name = (user.first_name or "").strip()
+    if display_name:
+        return display_name
+    return user.username
 
 
 def _render_refreshable_page(request, full_template, partial_template, context):
@@ -715,15 +725,6 @@ def register_view(request, pk=None):
 @login_required
 def join_tournament_list_view(request):
     """Show all open tournaments the user can join."""
-    # Organizers cannot join tournaments directly — they must use a separate team account
-    if _is_organizer(request.user):
-        messages.info(
-            request,
-            "As an organizer, you cannot join tournaments with this account. "
-            "If you want to participate, please create a separate team account."
-        )
-        return redirect("dashboard")
-    
     open_tournaments = Tournament.objects.filter(
         status="registration_open"
     ).order_by("start_date", "created_at")
@@ -749,15 +750,6 @@ def join_tournament_list_view(request):
 @login_required
 def join_tournament_view(request, pk):
     """Browse teams in a tournament — join an existing one or create a new one."""
-    # Organizers cannot join tournaments directly — they must use a separate team account
-    if _is_organizer(request.user):
-        messages.info(
-            request,
-            "As an organizer, you cannot join tournaments with this account. "
-            "If you want to participate, please create a separate team account."
-        )
-        return redirect("dashboard")
-    
     tournament = get_object_or_404(Tournament, pk=pk)
 
     if tournament.status != "registration_open":
@@ -781,11 +773,12 @@ def join_tournament_view(request, pk):
         .order_by("name")
     )
     players_per_team = tournament.players_per_team
+    registration_mode = tournament.registration_mode
 
     team_list = []
     for team in teams:
         count = team.memberships.count()
-        is_full = count >= players_per_team
+        is_full = registration_mode == "individual" or count >= players_per_team
         is_user_member = existing_membership and existing_membership.team_id == team.pk
         team_list.append({
             "team": team,
@@ -800,6 +793,7 @@ def join_tournament_view(request, pk):
         "team_list": team_list,
         "user_team": user_team,
         "players_per_team": players_per_team,
+        "registration_mode": registration_mode,
     })
 
 
@@ -807,16 +801,11 @@ def join_tournament_view(request, pk):
 @require_POST
 def join_team_view(request, tournament_pk, team_pk):
     """Join an existing team in a tournament."""
-    # Organizers cannot join tournaments directly — they must use a separate team account
-    if _is_organizer(request.user):
-        messages.info(
-            request,
-            "As an organizer, you cannot join tournaments with this account. "
-            "If you want to participate, please create a separate team account."
-        )
-        return redirect("dashboard")
-    
     tournament = get_object_or_404(Tournament, pk=tournament_pk)
+    if tournament.registration_mode == "individual":
+        messages.error(request, "This tournament only accepts individual registrations.")
+        return redirect("join_tournament", pk=tournament_pk)
+
     team = get_object_or_404(Team, pk=team_pk)
     # Verify the team actually participates in this tournament
     if not TeamTournamentParticipation.objects.filter(team=team, tournament=tournament, status="active").exists():
@@ -851,15 +840,6 @@ def join_team_view(request, tournament_pk, team_pk):
 @login_required
 def create_team_view(request, pk):
     """Create a brand-new team in an open tournament."""
-    # Organizers cannot join tournaments directly — they must use a separate team account
-    if _is_organizer(request.user):
-        messages.info(
-            request,
-            "As an organizer, you cannot create teams with this account. "
-            "If you want to participate, please create a separate team account."
-        )
-        return redirect("dashboard")
-    
     tournament = get_object_or_404(Tournament, pk=pk)
 
     if tournament.status != "registration_open":
@@ -874,6 +854,42 @@ def create_team_view(request, pk):
     if request.method == "POST":
         form = CreateTeamForm(request.POST, tournament=tournament)
         if form.is_valid():
+            if tournament.registration_mode == "individual":
+                requested_name = form.cleaned_data.get("participant_name", "")
+                team_name = _resolve_individual_team_name(request.user, requested_name=requested_name)
+
+                existing_captain_team = Team.objects.filter(
+                    name__iexact=team_name,
+                    memberships__user=request.user,
+                    memberships__role="captain",
+                ).first()
+                if existing_captain_team:
+                    team = existing_captain_team
+                elif Team.objects.filter(name__iexact=team_name).exists():
+                    form.add_error("participant_name", "That name is already in use. Please choose a different player name.")
+                    return render(request, "core/create_team.html", {
+                        "form": form,
+                        "tournament": tournament,
+                        **_tournament_context(request, tournament),
+                    })
+                else:
+                    team = Team.objects.create(name=team_name, sport_type=tournament.sport_type)
+                    TeamMembership.objects.create(team=team, user=request.user, role="captain")
+
+                TeamTournamentParticipation.objects.get_or_create(
+                    team=team,
+                    tournament=tournament,
+                    defaults={"status": "active"},
+                )
+                log_action(
+                    request,
+                    "individual_registered",
+                    f"Player '{team_name}' registered for '{tournament.name}'",
+                    tournament=tournament,
+                )
+                messages.success(request, f"You are registered as '{team_name}'.")
+                return redirect("dashboard")
+
             team_name = form.cleaned_data["team_name"]
             if Team.objects.filter(name__iexact=team_name).exists():
                 form.add_error("team_name", "A team with that name already exists.")
@@ -881,6 +897,7 @@ def create_team_view(request, pk):
                 team = Team.objects.create(
                     name=team_name,
                     department=form.cleaned_data.get("department", "").strip(),
+                    sport_type=tournament.sport_type,
                 )
                 TeamTournamentParticipation.objects.create(team=team, tournament=tournament, status="active")
                 TeamMembership.objects.create(team=team, user=request.user, role="captain")
@@ -898,6 +915,36 @@ def create_team_view(request, pk):
     return render(request, "core/create_team.html", {
         "form": form,
         "tournament": tournament,
+        **_tournament_context(request, tournament),
+    })
+
+
+@login_required
+def create_standalone_team_view(request):
+    """Create a reusable team independent of any tournament."""
+    if request.method == "POST":
+        form = StandaloneTeamForm(request.POST)
+        if form.is_valid():
+            team_name = form.cleaned_data["team_name"].strip()
+            if Team.objects.filter(name__iexact=team_name).exists():
+                form.add_error("team_name", "A team with that name already exists.")
+            else:
+                team = Team.objects.create(
+                    name=team_name,
+                    department=form.cleaned_data.get("department", "").strip(),
+                    sport_type=form.cleaned_data.get("sport_type") or "other",
+                )
+                TeamMembership.objects.create(team=team, user=request.user, role="captain")
+                log_action(request, "standalone_team_created", f"Team '{team_name}' created by '{request.user.username}'")
+                messages.success(request, f"Team '{team_name}' created.")
+                return redirect("team_detail", pk=team.pk)
+    else:
+        form = StandaloneTeamForm()
+
+    tournament = _get_tournament(request)
+    return render(request, "core/create_standalone_team.html", {
+        "form": form,
+        **_tournament_context(request, tournament),
     })
 
 
@@ -1209,7 +1256,19 @@ def tournament_config(request, pk):
         return redirect("dashboard")
     tournament = get_object_or_404(Tournament, pk=pk)
     request.session["selected_tournament_id"] = tournament.pk
-    teams = Team.objects.filter(participations__tournament=tournament).prefetch_related("players").distinct()
+    team_participations = list(
+        TeamTournamentParticipation.objects.filter(tournament=tournament)
+        .select_related("team")
+        .order_by("team__name")
+    )
+
+    for participation in team_participations:
+        participation.member_count = participation.team.memberships.count()
+        participation.preferred_court_names = list(
+            TeamTournamentCourtPreference.objects.filter(participation=participation)
+            .select_related("court")
+            .values_list("court__name", flat=True)
+        )
 
     # Determine whether to show the "Proceed to Knockout Phase" button
     show_proceed_knockout = False
@@ -1226,7 +1285,7 @@ def tournament_config(request, pk):
         "tournament": tournament,
         "courts": tournament.courts.all(),
         "court_availabilities": CourtAvailability.objects.filter(court__tournament=tournament).select_related("court"),
-        "teams": teams,
+        "team_participations": team_participations,
         "time_slots": tournament.time_slots.select_related("court").all(),
         "court_form": CourtForm(),
         "timeslot_form": TimeSlotForm(tournament=tournament),
@@ -2433,14 +2492,17 @@ def standings_view(request):
 @login_required
 def teams_view(request):
     tournament = _get_tournament(request)
-    if not tournament:
-        return render(request, "core/teams.html", {
-            "teams": [],
-            **_tournament_context(request, tournament),
-        })
-    teams = Team.objects.filter(participations__tournament=tournament).prefetch_related("players").distinct().order_by("name")
+    teams = []
+    if tournament:
+        teams = Team.objects.filter(participations__tournament=tournament).prefetch_related("players").distinct().order_by("name")
+        for team in teams:
+            participation = team.participations.filter(tournament=tournament).first()
+            team.group = participation.group if participation else ""
+
+    my_teams = Team.objects.filter(memberships__user=request.user).distinct().order_by("name")
     return render(request, "core/teams.html", {
         "tournament": tournament, "teams": teams,
+        "my_teams": my_teams,
         "is_organizer": _is_organizer(request.user),
         **_tournament_context(request, tournament),
     })
@@ -2449,7 +2511,10 @@ def teams_view(request):
 @login_required
 def team_detail(request, pk):
     team = get_object_or_404(Team.objects.prefetch_related("players"), pk=pk)
-    tournament = _get_tournament(request)
+    selected_tournament = _get_tournament(request)
+    tournament = selected_tournament
+    if tournament and not TeamTournamentParticipation.objects.filter(team=team, tournament=tournament).exists():
+        tournament = None
     if not tournament:
         participation = team.participations.select_related("tournament").order_by("-created_at").first()
         tournament = participation.tournament if participation else None
@@ -2478,7 +2543,7 @@ def team_detail(request, pk):
         "members_full": members_full,
         "max_members": max_members,
         "invite_form": TeamMemberInviteForm() if (is_captain or is_organizer) else None,
-        **_tournament_context(request, tournament),
+        **_tournament_context(request, selected_tournament),
     })
 
 
@@ -2491,6 +2556,8 @@ def manage_team_members(request, pk):
         messages.error(request, "Only the team captain can manage members.")
         return redirect("team_detail", pk=pk)
     tournament = _get_tournament(request)
+    if tournament and not TeamTournamentParticipation.objects.filter(team=team, tournament=tournament).exists():
+        tournament = None
     max_members = tournament.players_per_team if tournament else None
     if max_members is not None and team.memberships.count() >= max_members:
         messages.error(request, f"Team is already at the maximum of {max_members} member(s).")
@@ -3424,14 +3491,13 @@ def public_fixtures(request):
 @require_POST
 def enter_existing_team_view(request, pk):
     """Captain enters an existing (global) team into a new open tournament."""
-    if _is_organizer(request.user):
-        messages.info(request, "Organizers cannot join tournaments with this account.")
-        return redirect("dashboard")
-
     tournament = get_object_or_404(Tournament, pk=pk)
     if tournament.status != "registration_open":
         messages.error(request, "Registration is currently closed for this tournament.")
         return redirect("join_tournament_list")
+    if tournament.registration_mode == "individual":
+        messages.error(request, "This tournament only accepts individual registrations.")
+        return redirect("join_tournament", pk=pk)
 
     # User must be captain of some team
     captain_membership = request.user.memberships.filter(role="captain").select_related("team").first()

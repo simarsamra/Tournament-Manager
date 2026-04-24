@@ -19,7 +19,7 @@
 {% endif %}
 
 <h1 class="page-title">{{ tournament.name }} <span class="badge badge-{{ tournament.status }}">{{ tournament.get_status_display }}</span></h1>
-<p class="text-muted mb-2">Sport: {{ tournament.get_sport_type_display }} | Format: {{ tournament.get_format_display }} | Players/Team: {{ tournament.players_per_team }} | Expected Teams: {{ tournament.expected_teams_count|default:"-" }} | Start: {{ tournament.start_date|default:"-" }} | Duration: {{ tournament.default_match_duration }}min</p>
+<p class="text-muted mb-2">Sport: {{ tournament.get_sport_type_display }} | Registration: {{ tournament.get_registration_mode_display }} | Format: {{ tournament.get_format_display }} | Players/Team: {{ tournament.players_per_team }} | Expected Teams: {{ tournament.expected_teams_count|default:"-" }} | Start: {{ tournament.start_date|default:"-" }} | Duration: {{ tournament.default_match_duration }}min</p>
 
 <div class="grid grid-3">
     <!-- Courts -->
@@ -148,31 +148,36 @@
 
     <!-- Teams -->
     <div class="card">
-        <div class="card-header">Teams ({{ teams.count }})</div>
+        <div class="card-header">Registrations ({{ team_participations|length }})</div>
         <div class="card-body">
-            {% for t in teams %}
+            {% for p in team_participations %}
             <div class="mb-1" style="padding:0.5rem;background:#f8f9fa;border-radius:6px;">
                 <div class="d-flex justify-between align-center">
-                    <strong>{{ t.name }}</strong>
-                    <span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span>
+                    <strong>{{ p.team.name }}</strong>
+                    <span class="badge badge-{{ p.status }}">{{ p.get_status_display }}</span>
                 </div>
-                {% if t.department %}
                 <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
-                    Department: {{ t.department }}
+                    Sport: {{ p.team.get_sport_type_display }}
                 </div>
-                {% endif %}
-                {% if t.players.all %}
+                {% if p.team.department %}
                 <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
-                    Players: {% for p in t.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                    Department: {{ p.team.department }}
                 </div>
                 {% endif %}
+                {% if p.team.players.all %}
                 <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
-                    Preferred courts:
-                    {% for c in t.preferred_courts.all %}{{ c.name }}{% if not forloop.last %}, {% endif %}{% empty %}<span class="text-danger">Not set</span>{% endfor %}
+                    Players: {% for player in p.team.players.all %}{{ player.name }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                </div>
+                {% endif %}
+                <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
+                    Members: {{ p.member_count }}
+                </div>
+                <div style="font-size:0.8rem;color:#666;margin-top:0.25rem;">
+                    Preferred courts: {% if p.preferred_court_names %}{{ p.preferred_court_names|join:", " }}{% else %}<span class="text-danger">Not set</span>{% endif %}
                 </div>
             </div>
             {% empty %}
-            <p class="text-muted">No teams registered yet.</p>
+            <p class="text-muted">No entries yet.</p>
             {% endfor %}
             <hr style="margin:1rem 0;">
             <h4 style="font-size:0.9rem;margin-bottom:0.5rem;">Add Teams via Text</h4>
@@ -198,7 +203,7 @@
         <div class="d-flex justify-between align-center" style="gap:1rem; flex-wrap:wrap;">
             <div>
                 <strong>Workflow</strong><br>
-                <span class="text-muted">Status: {{ tournament.get_status_display }} • {{ teams.count }} teams • {{ courts.count }} courts</span>
+                <span class="text-muted">Status: {{ tournament.get_status_display }} • {{ team_participations|length }} entries • {{ courts.count }} courts</span>
             </div>
             <div class="d-flex" style="gap:0.5rem; flex-wrap:wrap;">
                 {% if tournament.status == 'setup' or tournament.status == 'ready' %}

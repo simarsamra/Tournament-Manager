@@ -8,7 +8,7 @@ class TournamentForm(forms.ModelForm):
     class Meta:
         model = Tournament
         fields = [
-            "name", "sport_type", "format", "players_per_team",
+            "name", "sport_type", "registration_mode", "format", "players_per_team",
             "start_date", "expected_teams_count",
             "points_per_win", "points_per_loss",
             "points_per_draw", "num_groups", "teams_per_group_advance",
@@ -17,6 +17,7 @@ class TournamentForm(forms.ModelForm):
         widgets = {
             "name": forms.TextInput(attrs={"class": "form-control"}),
             "sport_type": forms.Select(attrs={"class": "form-select"}),
+            "registration_mode": forms.Select(attrs={"class": "form-select"}),
             "format": forms.Select(attrs={"class": "form-select"}),
             "players_per_team": forms.NumberInput(attrs={"class": "form-control", "min": "1"}),
             "start_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
@@ -29,6 +30,17 @@ class TournamentForm(forms.ModelForm):
             "withdrawal_policy": forms.Select(attrs={"class": "form-select"}),
             "default_match_duration": forms.NumberInput(attrs={"class": "form-control", "min": "5"}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Keep backwards compatibility for callers/tests that do not post this field.
+        self.fields["registration_mode"].required = False
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("registration_mode") == "individual":
+            cleaned["players_per_team"] = 1
+        return cleaned
 
 
 class CourtForm(forms.ModelForm):
@@ -178,10 +190,16 @@ class CreateTeamForm(forms.Form):
         widget=forms.CheckboxSelectMultiple(),
         help_text="Select the courts your team prefers for scheduled matches.",
     )
+    participant_name = forms.CharField(
+        max_length=100,
+        required=False,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Your name"}),
+    )
 
     def __init__(self, *args, tournament=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.tournament = tournament
+        self.is_individual_mode = bool(tournament and tournament.registration_mode == "individual")
         if tournament:
             courts = Court.objects.filter(tournament=tournament, is_available=True).order_by("name")
             self.fields["preferred_courts"].queryset = courts
@@ -189,12 +207,43 @@ class CreateTeamForm(forms.Form):
             if not courts.exists():
                 self.fields["preferred_courts"].help_text = "No courts are currently available for preference selection."
 
+        if self.is_individual_mode:
+            self.fields["team_name"].required = False
+            self.fields["department"].required = False
+            self.fields["participant_name"].required = True
+            self.fields["team_name"].widget = forms.HiddenInput()
+            self.fields["department"].widget = forms.HiddenInput()
+        else:
+            self.fields["participant_name"].widget = forms.HiddenInput()
+
     def clean(self):
         cleaned = super().clean()
+        if self.is_individual_mode:
+            if not (cleaned.get("participant_name") or "").strip():
+                raise forms.ValidationError("Please provide a player name.")
+            return cleaned
+
         courts = cleaned.get("preferred_courts")
         if self.tournament and self.tournament.courts.filter(is_available=True).exists() and not courts:
             raise forms.ValidationError("Please select at least one preferred court.")
         return cleaned
+
+
+class StandaloneTeamForm(forms.Form):
+    team_name = forms.CharField(
+        max_length=100,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Team Name"}),
+    )
+    department = forms.CharField(
+        max_length=120,
+        required=False,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Department (optional)"}),
+    )
+    sport_type = forms.ChoiceField(
+        choices=Tournament.SPORT_CHOICES,
+        widget=forms.Select(attrs={"class": "form-select"}),
+        initial="other",
+    )
 
 
 # Keep for backwards compat with bulk-add (organiser tool) — still used in _create_teams_from_data

@@ -3,13 +3,49 @@
 {% block page_header %}Teams{% endblock %}
 {% block content %}
 <h1 class="page-title">{% if tournament %}{{ tournament.name }} — {% endif %}Teams</h1>
+
+<div class="card mb-2">
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+        <span>My Teams</span>
+        <a href="{% url 'create_standalone_team' %}" class="btn btn-primary btn-sm">+ Create Team</a>
+    </div>
+    <div class="card-body" style="padding:0;">
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Sport</th>
+                        <th>Department</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for t in my_teams %}
+                    <tr>
+                        <td><strong>{{ t.name }}</strong></td>
+                        <td>{{ t.get_sport_type_display }}</td>
+                        <td class="text-muted">{{ t.department|default:"-" }}</td>
+                        <td><a href="{% url 'team_detail' pk=t.pk %}" class="btn btn-outline btn-sm">Manage</a></td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="4" class="text-center text-muted">You are not in any team yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
 {% if tournament %}
 <div class="card">
+    <div class="card-header">Tournament Registrations</div>
     <div class="table-container">
     <table>
         <thead>
             <tr>
                 <th>Name</th>
+                <th>Sport</th>
                 <th>Department</th>
                 <th>Players</th>
                 {% if tournament.format == "hybrid" %}<th>Group</th>{% endif %}
@@ -20,6 +56,7 @@
             {% for t in teams %}
             <tr>
                 <td><strong>{{ t.name }}</strong></td>
+                <td>{{ t.get_sport_type_display }}</td>
                 <td class="text-muted">{{ t.department|default:"-" }}</td>
                 <td style="font-size:0.85rem;color:#666;">
                     {% for p in t.players.all %}{{ p.name }}{% if not forloop.last %}, {% endif %}{% empty %}-{% endfor %}
@@ -28,7 +65,7 @@
                 <td><a href="{% url 'team_detail' pk=t.pk %}" class="btn btn-outline btn-sm">View</a></td>
             </tr>
             {% empty %}
-            <tr><td colspan="{% if tournament.format == 'hybrid' %}5{% else %}4{% endif %}" class="text-center text-muted">No teams registered.</td></tr>
+            <tr><td colspan="{% if tournament.format == 'hybrid' %}6{% else %}5{% endif %}" class="text-center text-muted">No teams registered.</td></tr>
             {% endfor %}
         </tbody>
     </table>

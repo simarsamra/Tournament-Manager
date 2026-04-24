@@ -58,6 +58,7 @@ urlpatterns = [
     # Teams
     path("teams/", views.teams_view, name="teams"),
     path("team/<int:pk>/", views.team_detail, name="team_detail"),
+    path("teams/create/", views.create_standalone_team_view, name="create_standalone_team"),
     path("team/<int:pk>/withdraw/", views.withdraw_team, name="withdraw_team"),
     path("team/<int:pk>/preferences/", views.team_preferences, name="team_preferences"),
     path("team/<int:pk>/members/add/", views.manage_team_members, name="manage_team_members"),

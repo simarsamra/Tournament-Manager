@@ -589,6 +589,57 @@ class UXAndLogicRegressionTests(TestCase):
 		)
 		self.assertEqual(team.department, "Engineering")
 
+	def test_user_can_create_multiple_standalone_teams(self):
+		user = User.objects.create_user(username="multi_team_owner", password="abc12345")
+		self.client.force_login(user)
+
+		response_one = self.client.post(
+			reverse("create_standalone_team"),
+			{
+				"team_name": "Street Smashers",
+				"sport_type": "table_tennis",
+				"department": "Operations",
+			},
+			follow=True,
+		)
+		response_two = self.client.post(
+			reverse("create_standalone_team"),
+			{
+				"team_name": "Sunday Strikers",
+				"sport_type": "tennis",
+				"department": "Finance",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response_one.status_code, 200)
+		self.assertEqual(response_two.status_code, 200)
+		self.assertEqual(Team.objects.filter(memberships__user=user).distinct().count(), 2)
+		self.assertTrue(Team.objects.filter(name="Street Smashers", sport_type="table_tennis").exists())
+		self.assertTrue(Team.objects.filter(name="Sunday Strikers", sport_type="tennis").exists())
+
+	def test_individual_registration_mode_registers_player_name(self):
+		tournament = self._create_tournament(name="Singles Cup")
+		tournament.status = "registration_open"
+		tournament.registration_mode = "individual"
+		tournament.players_per_team = 1
+		tournament.save(update_fields=["status", "registration_mode", "players_per_team"])
+
+		user = User.objects.create_user(username="solo_player", password="abc12345", first_name="Solo Player")
+		self.client.force_login(user)
+
+		response = self.client.post(
+			reverse("create_team", kwargs={"pk": tournament.pk}),
+			{"participant_name": "Solo Player"},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		team = Team.objects.filter(name="Solo Player").first()
+		self.assertIsNotNone(team)
+		self.assertTrue(TeamTournamentParticipation.objects.filter(team=team, tournament=tournament).exists())
+		self.assertTrue(TeamMembership.objects.filter(team=team, user=user, role="captain").exists())
+
 	def test_organizer_generates_schedule_draft_then_publishes_tournament(self):
 		tournament = self._create_tournament(name="Draft Flow")
 		tournament.expected_teams_count = 2

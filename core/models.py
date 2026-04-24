@@ -27,11 +27,21 @@ class Tournament(models.Model):
         ("forfeit", "Forfeit remaining matches"),
         ("void", "Void remaining matches"),
     ]
+    REGISTRATION_MODE_CHOICES = [
+        ("team", "Register Teams"),
+        ("individual", "Register Individuals"),
+    ]
 
     name = models.CharField(max_length=200)
     sport_type = models.CharField(
         max_length=30, choices=SPORT_CHOICES, default="other",
         help_text="Type of sport for this tournament",
+    )
+    registration_mode = models.CharField(
+        max_length=20,
+        choices=REGISTRATION_MODE_CHOICES,
+        default="team",
+        help_text="Choose whether this tournament registers full teams or individual players.",
     )
     format = models.CharField(max_length=30, choices=FORMAT_CHOICES)
     players_per_team = models.IntegerField(
@@ -162,6 +172,12 @@ class CourtAvailability(models.Model):
 class Team(models.Model):
     name = models.CharField(max_length=100, unique=True)
     department = models.CharField(max_length=120, blank=True, default="")
+    sport_type = models.CharField(
+        max_length=30,
+        choices=Tournament.SPORT_CHOICES,
+        default="other",
+        blank=True,
+    )
 
     def __str__(self):
         return self.name
