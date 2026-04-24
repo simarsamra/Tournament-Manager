@@ -69,7 +69,11 @@
                                 <input type="hidden" name="next" value="{{ request.get_full_path }}">
                                 <button type="submit" class="btn btn-outline btn-sm">Open</button>
                             </form>
+                            {% if t.status == 'completed' %}
+                            <span class="btn btn-primary btn-sm" style="opacity:0.45;cursor:not-allowed;pointer-events:none;" title="Completed tournaments cannot be configured">Configure</span>
+                            {% else %}
                             <a href="{% url 'tournament_config' pk=t.pk %}" class="btn btn-primary btn-sm">Configure</a>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}

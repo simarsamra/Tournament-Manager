@@ -175,12 +175,15 @@ def _tournament_context(request, tournament=None):
         )
         ctx["user_tournaments"] = user_tournaments
         ctx["selected_tournament"] = tournament
-    # Open tournaments the user has NOT yet joined — for sidebar prompt
-    joinable = list(
-        Tournament.objects.filter(status="registration_open")
-        .exclude(pk__in=user_tournament_ids)
-        .order_by("-created_at")
+    # All open-registration tournaments (for notification count)
+    open_registration_tournaments = list(
+        Tournament.objects.filter(status="registration_open").order_by("-created_at")
     )
+    if open_registration_tournaments:
+        ctx["open_registration_tournaments"] = open_registration_tournaments
+
+    # Open tournaments the user has NOT yet joined — for quick join actions
+    joinable = [t for t in open_registration_tournaments if t.pk not in set(user_tournament_ids)]
     if joinable:
         ctx["joinable_tournaments"] = joinable
     return ctx
@@ -243,6 +246,27 @@ def _safe_page_param(request, default=1):
     except (TypeError, ValueError):
         return default
     return page if page > 0 else default
+
+
+def _auto_end_date(tournament):
+    """Return an auto-computed end_date based on total matches, courts, and match duration.
+
+    Assumes an 8-hour working day per court. Returns None if start_date is absent.
+    """
+    import math
+    start = tournament.start_date
+    if not start:
+        return None
+    team_count = tournament.expected_teams_count or tournament.team_participations.filter(status="active").count()
+    total_matches = estimate_required_matches(tournament, team_count)
+    if total_matches <= 0:
+        return start
+    courts = max(1, tournament.courts.filter(is_available=True).count())
+    duration = max(5, tournament.default_match_duration or 30)
+    matches_per_court_per_day = max(1, 480 // duration)   # 8-hour day
+    matches_per_day = matches_per_court_per_day * courts
+    days_needed = math.ceil(total_matches / matches_per_day)
+    return start + timedelta(days=max(0, days_needed - 1))
 
 
 def _is_partial_refresh(request):
@@ -1290,7 +1314,10 @@ def tournament_setup(request):
     if request.method == "POST":
         form = TournamentForm(request.POST)
         if form.is_valid():
-            t = form.save()
+            t = form.save(commit=False)
+            if not t.end_date and t.start_date:
+                t.end_date = _auto_end_date(t)
+            t.save()
             request.session["selected_tournament_id"] = t.pk
             log_action(request, "tournament_created",
                        f"Tournament '{t.name}' created ({t.get_format_display()})",
@@ -1771,10 +1798,10 @@ def test_maker_view(request):
                 )
                 created_users += 1
 
-                team = Team.objects.create(
-                    name=team_name,
-                )
-                created_teams += 1
+                # Reuse existing team by name if already present (e.g. from another tournament)
+                team, team_created = Team.objects.get_or_create(name=team_name)
+                if team_created:
+                    created_teams += 1
 
                 _, participation_created = TeamTournamentParticipation.objects.get_or_create(
                     team=team,
@@ -3449,10 +3476,17 @@ def settings_view(request):
     tournament = _get_tournament(request)
     if not tournament:
         return render(request, "core/settings.html", _tournament_context(request, tournament))
+    is_settings_locked = bool(tournament.started_at or tournament.status in ("active", "completed"))
     if request.method == "POST":
+        if is_settings_locked:
+            messages.error(request, "Tournament settings are locked after the tournament has started.")
+            return redirect("settings")
         form = TournamentForm(request.POST, instance=tournament)
         if form.is_valid():
-            form.save()
+            t = form.save(commit=False)
+            if not t.end_date and t.start_date:
+                t.end_date = _auto_end_date(t)
+            t.save()
             log_action(request, "settings_updated", "Tournament settings updated", tournament=tournament)
             messages.success(request, "Settings updated.")
             return redirect("settings")
@@ -3461,6 +3495,7 @@ def settings_view(request):
     return render(request, "core/settings.html", {
         "tournament": tournament,
         "form": form,
+        "is_settings_locked": is_settings_locked,
         "users": User.objects.filter(is_superuser=False).order_by("username"),
         **_tournament_context(request, tournament),
     })

@@ -68,6 +68,11 @@ class Tournament(models.Model):
         blank=True,
         help_text="Date from which automatic scheduling should begin",
     )
+    end_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Expected end date (auto-calculated if left blank)",
+    )
     expected_teams_count = models.PositiveIntegerField(
         default=0,
         blank=True,

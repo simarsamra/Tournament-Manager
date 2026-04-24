@@ -9,7 +9,7 @@ class TournamentForm(forms.ModelForm):
         model = Tournament
         fields = [
             "name", "sport_type", "registration_mode", "format", "players_per_team",
-            "start_date", "expected_teams_count",
+            "start_date", "end_date", "expected_teams_count",
             "points_per_win", "points_per_loss",
             "points_per_draw", "num_groups", "teams_per_group_advance",
             "withdrawal_policy", "default_match_duration",
@@ -21,6 +21,7 @@ class TournamentForm(forms.ModelForm):
             "format": forms.Select(attrs={"class": "form-select"}),
             "players_per_team": forms.NumberInput(attrs={"class": "form-control", "min": "1"}),
             "start_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
+            "end_date": forms.DateInput(attrs={"class": "form-control", "type": "date"}),
             "expected_teams_count": forms.NumberInput(attrs={"class": "form-control", "min": "2"}),
             "points_per_win": forms.NumberInput(attrs={"class": "form-control"}),
             "points_per_loss": forms.NumberInput(attrs={"class": "form-control"}),
