@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from django.core.cache import cache as django_cache
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
 from django.db import IntegrityError
@@ -26,7 +26,8 @@ from .models import (
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
-    AccountRegistrationForm, CreateTeamForm, StandaloneTeamForm,
+    AccountRegistrationForm, ProfileUpdateForm, SelfPasswordChangeForm,
+    CreateTeamForm, StandaloneTeamForm,
     ScoreSubmitForm, RescheduleForm, TeamPreferencesForm, BulkTeamForm,
     BulkTeamFileForm, CourtAvailabilityForm, TeamMemberInviteForm, ExistingTeamMemberForm,
 )
@@ -150,6 +151,11 @@ def _tournament_context(request, tournament=None):
     ctx = {
         "has_dual_roles": has_dual_roles,
         "view_mode": view_mode,
+        "my_teams_sidebar": list(
+            Team.objects.filter(memberships__user=request.user)
+            .distinct()
+            .order_by("name")
+        ),
     }
     
     if _is_organizer(request.user):
@@ -713,6 +719,55 @@ def account_register_view(request):
     else:
         form = AccountRegistrationForm()
     return render(request, "core/register.html", {"form": form})
+
+
+@login_required
+def profile_view(request):
+    tournament = _get_tournament(request)
+    if request.method == "POST":
+        action = (request.POST.get("action") or "").strip()
+        if action == "change_password":
+            profile_form = ProfileUpdateForm(initial={
+                "first_name": request.user.first_name,
+                "last_name": request.user.last_name,
+                "email": request.user.email,
+            })
+            password_form = SelfPasswordChangeForm(request.POST)
+            if password_form.is_valid():
+                current_password = password_form.cleaned_data["current_password"]
+                if not request.user.check_password(current_password):
+                    messages.error(request, "Current password is incorrect.")
+                else:
+                    request.user.set_password(password_form.cleaned_data["new_password"])
+                    request.user.save(update_fields=["password"])
+                    update_session_auth_hash(request, request.user)
+                    log_action(request, "profile_password_changed", f"User '{request.user.username}' changed password")
+                    messages.success(request, "Password updated successfully.")
+                    return redirect("profile")
+        else:
+            profile_form = ProfileUpdateForm(request.POST)
+            password_form = SelfPasswordChangeForm()
+            if profile_form.is_valid():
+                request.user.first_name = profile_form.cleaned_data.get("first_name", "").strip()
+                request.user.last_name = profile_form.cleaned_data.get("last_name", "").strip()
+                request.user.email = profile_form.cleaned_data.get("email", "").strip()
+                request.user.save(update_fields=["first_name", "last_name", "email"])
+                log_action(request, "profile_updated", f"User '{request.user.username}' updated profile")
+                messages.success(request, "Profile updated.")
+                return redirect("profile")
+    else:
+        profile_form = ProfileUpdateForm(initial={
+            "first_name": request.user.first_name,
+            "last_name": request.user.last_name,
+            "email": request.user.email,
+        })
+        password_form = SelfPasswordChangeForm()
+
+    return render(request, "core/profile.html", {
+        "profile_form": profile_form,
+        "password_form": password_form,
+        **_tournament_context(request, tournament),
+    })
 
 
 # Keep old name as alias so any hard-coded URL still works
@@ -2494,7 +2549,10 @@ def teams_view(request):
     tournament = _get_tournament(request)
     teams = []
     if tournament:
-        teams = Team.objects.filter(participations__tournament=tournament).prefetch_related("players").distinct().order_by("name")
+        teams = Team.objects.filter(
+            participations__tournament=tournament,
+            participations__status="active",
+        ).prefetch_related("players").distinct().order_by("name")
         for team in teams:
             participation = team.participations.filter(tournament=tournament).first()
             team.group = participation.group if participation else ""

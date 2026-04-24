@@ -521,6 +521,21 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(fixtures_response.status_code, 200)
 		self.assertEqual(fixtures_response.context["tournament"], second)
 
+	def test_teams_page_shows_only_active_teams_in_selected_tournament(self):
+		tournament = self._create_tournament(name="Visibility Cup")
+		active_team = self._create_team(tournament, "Active Team")
+		withdrawn_team = self._create_team(tournament, "Withdrawn Team")
+		p = TeamTournamentParticipation.objects.get(team=withdrawn_team, tournament=tournament)
+		p.status = "withdrawn"
+		p.save(update_fields=["status"])
+
+		self.client.force_login(self.organizer)
+		response = self.client.get(reverse("teams"))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Active Team")
+		self.assertNotContains(response, "Withdrawn Team")
+
 	def test_remove_team_member_keeps_user_account(self):
 		tournament = self._create_tournament(name="Membership Safety")
 		team = self._create_team(tournament, "Captains")
@@ -571,6 +586,56 @@ class UXAndLogicRegressionTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(TeamMembership.objects.filter(team=team, user=existing_user).count(), 1)
+
+	def test_user_can_update_own_profile_fields(self):
+		user = User.objects.create_user(
+			username="profile_user",
+			password="pass123",
+			first_name="Old",
+			last_name="Name",
+			email="old@example.com",
+		)
+		self.client.force_login(user)
+
+		response = self.client.post(
+			reverse("profile"),
+			{
+				"action": "update_profile",
+				"first_name": "New",
+				"last_name": "User",
+				"email": "new@example.com",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		user.refresh_from_db()
+		self.assertEqual(user.first_name, "New")
+		self.assertEqual(user.last_name, "User")
+		self.assertEqual(user.email, "new@example.com")
+
+	def test_user_can_change_own_password(self):
+		user = User.objects.create_user(username="pw_user", password="pass123")
+		self.client.force_login(user)
+
+		response = self.client.post(
+			reverse("profile"),
+			{
+				"action": "change_password",
+				"current_password": "pass123",
+				"new_password": "pass12345",
+				"confirm_password": "pass12345",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		user.refresh_from_db()
+		self.assertTrue(user.check_password("pass12345"))
+
+		self.client.logout()
+		login_ok = self.client.login(username="pw_user", password="pass12345")
+		self.assertTrue(login_ok)
 
 	def test_tournament_form_saves_start_date_and_expected_teams(self):
 		form = TournamentForm(data={

@@ -173,6 +173,49 @@ class AccountRegistrationForm(forms.Form):
         return cleaned
 
 
+class ProfileUpdateForm(forms.Form):
+    first_name = forms.CharField(
+        max_length=150,
+        required=False,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "First name"}),
+    )
+    last_name = forms.CharField(
+        max_length=150,
+        required=False,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Last name"}),
+    )
+    email = forms.EmailField(
+        required=False,
+        widget=forms.EmailInput(attrs={"class": "form-control", "placeholder": "Email (optional)"}),
+    )
+
+
+class SelfPasswordChangeForm(forms.Form):
+    current_password = forms.CharField(
+        widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Current password"}),
+    )
+    new_password = forms.CharField(
+        widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "New password"}),
+    )
+    confirm_password = forms.CharField(
+        widget=forms.PasswordInput(attrs={"class": "form-control", "placeholder": "Confirm new password"}),
+    )
+
+    def clean(self):
+        cleaned = super().clean()
+        current = cleaned.get("current_password") or ""
+        new_password = cleaned.get("new_password") or ""
+        confirm = cleaned.get("confirm_password") or ""
+
+        if new_password != confirm:
+            raise forms.ValidationError("New password and confirmation do not match.")
+        if len(new_password) < 6:
+            raise forms.ValidationError("New password must be at least 6 characters.")
+        if current and new_password and current == new_password:
+            raise forms.ValidationError("New password must be different from current password.")
+        return cleaned
+
+
 class CreateTeamForm(forms.Form):
     """Step 2: Create a new team inside an open tournament."""
     team_name = forms.CharField(

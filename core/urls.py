@@ -6,6 +6,7 @@ urlpatterns = [
     path("login/", views.login_view, name="login"),
     path("logout/", views.logout_view, name="logout"),
     path("register/", views.account_register_view, name="account_register"),
+    path("profile/", views.profile_view, name="profile"),
     # Legacy aliases kept for backwards compat
     path("register/legacy/", views.register_view, name="register"),
     path("tournament/<int:pk>/register/", views.register_view, name="tournament_register"),
