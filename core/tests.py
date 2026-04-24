@@ -537,6 +537,41 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertFalse(TeamMembership.objects.filter(team=team, user=member_user).exists())
 		self.assertTrue(User.objects.filter(pk=member_user.pk).exists())
 
+	def test_add_existing_user_to_team(self):
+		tournament = self._create_tournament(name="Existing User Add")
+		tournament.players_per_team = 2
+		tournament.save(update_fields=["players_per_team"])
+		team = self._create_team(tournament, "Captains")
+		existing_user = User.objects.create_user(username="already_here", password="pass123")
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("manage_team_members", kwargs={"pk": team.pk}),
+			{"member_action": "add_existing", "username": existing_user.username},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(TeamMembership.objects.filter(team=team, user=existing_user, role="member").exists())
+
+	def test_add_existing_user_prevents_duplicate_membership(self):
+		tournament = self._create_tournament(name="Duplicate Existing User")
+		tournament.players_per_team = 3
+		tournament.save(update_fields=["players_per_team"])
+		team = self._create_team(tournament, "Captains")
+		existing_user = User.objects.create_user(username="already_member", password="pass123")
+		TeamMembership.objects.create(team=team, user=existing_user, role="member")
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("manage_team_members", kwargs={"pk": team.pk}),
+			{"member_action": "add_existing", "username": existing_user.username},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(TeamMembership.objects.filter(team=team, user=existing_user).count(), 1)
+
 	def test_tournament_form_saves_start_date_and_expected_teams(self):
 		form = TournamentForm(data={
 			"name": "Planned Event",

@@ -139,8 +139,26 @@
                     {{ invite_form.password_confirm }}
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary btn-sm" {% if members_full %}disabled{% endif %}>Add Member</button>
+            <input type="hidden" name="member_action" value="create_account">
+            <button type="submit" class="btn btn-primary btn-sm" {% if members_full %}disabled{% endif %}>Create and Add Member</button>
         </form>
+
+        {% if existing_member_form %}
+        <hr style="margin:1rem 0;">
+        <h4 style="margin-bottom:0.75rem;font-size:0.9rem;">Add Existing User</h4>
+        <form method="post" action="{% url 'manage_team_members' pk=team.pk %}">
+            {% csrf_token %}
+            <div style="display:flex;gap:0.6rem;align-items:flex-end;flex-wrap:wrap;">
+                <div class="form-group" style="margin-bottom:0;min-width:240px;">
+                    <label style="font-size:0.8rem;">Username</label>
+                    {{ existing_member_form.username }}
+                </div>
+                <input type="hidden" name="member_action" value="add_existing">
+                <button type="submit" class="btn btn-outline btn-sm" {% if members_full %}disabled{% endif %}>Add Existing User</button>
+            </div>
+            <p class="text-muted" style="margin-top:0.4rem;font-size:0.8rem;">Use this when the person already has an account.</p>
+        </form>
+        {% endif %}
     </div>
     {% endif %}
 </div>

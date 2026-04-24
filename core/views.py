@@ -28,7 +28,7 @@ from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
     AccountRegistrationForm, CreateTeamForm, StandaloneTeamForm,
     ScoreSubmitForm, RescheduleForm, TeamPreferencesForm, BulkTeamForm,
-    BulkTeamFileForm, CourtAvailabilityForm, TeamMemberInviteForm,
+    BulkTeamFileForm, CourtAvailabilityForm, TeamMemberInviteForm, ExistingTeamMemberForm,
 )
 from .scheduling import (
     generate_fixtures,
@@ -2543,6 +2543,7 @@ def team_detail(request, pk):
         "members_full": members_full,
         "max_members": max_members,
         "invite_form": TeamMemberInviteForm() if (is_captain or is_organizer) else None,
+        "existing_member_form": ExistingTeamMemberForm() if (is_captain or is_organizer) else None,
         **_tournament_context(request, selected_tournament),
     })
 
@@ -2563,26 +2564,62 @@ def manage_team_members(request, pk):
         messages.error(request, f"Team is already at the maximum of {max_members} member(s).")
         return redirect("team_detail", pk=pk)
     if request.method == "POST":
-        form = TeamMemberInviteForm(request.POST)
-        if form.is_valid():
-            new_user = User.objects.create_user(
-                username=form.cleaned_data["username"],
-                password=form.cleaned_data["password"],
-            )
-            TeamMembership.objects.create(team=team, user=new_user, role="member")
-            log_action(
-                request,
-                "team_member_added",
-                f"Member '{new_user.username}' added to team '{team.name}'",
-                tournament=tournament,
-            )
-            messages.success(request, f"Account '{new_user.username}' created and added to {team.name}.")
+        member_action = (request.POST.get("member_action") or "create_account").strip()
+        if member_action == "add_existing":
+            form = ExistingTeamMemberForm(request.POST)
+            if form.is_valid():
+                username = form.cleaned_data["username"].strip()
+                existing_user = User.objects.filter(username=username).first()
+                if not existing_user:
+                    messages.error(request, "User not found.")
+                    return redirect("team_detail", pk=pk)
+
+                if TeamMembership.objects.filter(team=team, user=existing_user).exists():
+                    messages.error(request, f"'{username}' is already in this team.")
+                    return redirect("team_detail", pk=pk)
+
+                if tournament and existing_user.memberships.filter(
+                    team__participations__tournament=tournament
+                ).exclude(team=team).exists():
+                    messages.error(
+                        request,
+                        f"'{username}' is already in another team for this tournament.",
+                    )
+                    return redirect("team_detail", pk=pk)
+
+                TeamMembership.objects.create(team=team, user=existing_user, role="member")
+                log_action(
+                    request,
+                    "existing_team_member_added",
+                    f"Existing user '{existing_user.username}' added to team '{team.name}'",
+                    tournament=tournament,
+                )
+                messages.success(request, f"User '{existing_user.username}' added to {team.name}.")
+            else:
+                for field in form:
+                    for error in field.errors:
+                        messages.error(request, f"{field.label}: {error}")
         else:
-            for error in form.non_field_errors():
-                messages.error(request, error)
-            for field in form:
-                for error in field.errors:
-                    messages.error(request, f"{field.label}: {error}")
+            form = TeamMemberInviteForm(request.POST)
+            if form.is_valid():
+                new_user = User.objects.create_user(
+                    username=form.cleaned_data["username"],
+                    password=form.cleaned_data["password"],
+                )
+                TeamMembership.objects.create(team=team, user=new_user, role="member")
+                log_action(
+                    request,
+                    "team_member_added",
+                    f"Member '{new_user.username}' added to team '{team.name}'",
+                    tournament=tournament,
+                )
+                messages.success(request, f"Account '{new_user.username}' created and added to {team.name}.")
+            else:
+                for error in form.non_field_errors():
+                    messages.error(request, error)
+                for field in form:
+                    for error in field.errors:
+                        messages.error(request, f"{field.label}: {error}")
     return redirect("team_detail", pk=pk)
 
 

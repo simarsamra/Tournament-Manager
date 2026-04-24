@@ -396,3 +396,10 @@ class TeamMemberInviteForm(forms.Form):
         if username and User.objects.filter(username=username).exists():
             raise forms.ValidationError("Username already taken.")
         return cleaned
+
+
+class ExistingTeamMemberForm(forms.Form):
+    username = forms.CharField(
+        max_length=150,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "Existing username"}),
+    )
