@@ -2,6 +2,7 @@ from django.contrib import admin
 from .models import (
     Tournament, Court, TimeSlot, Team, Match,
     RescheduleRequest, OpenSlot, AuditLog, BackupRecord, CourtAvailability,
+    TeamTournamentParticipation, TeamTournamentCourtPreference,
 )
 
 
@@ -24,6 +25,18 @@ class CourtAvailabilityAdmin(admin.ModelAdmin):
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
     list_display = ["name", "tournament", "status", "user"]
+
+
+@admin.register(TeamTournamentParticipation)
+class TeamTournamentParticipationAdmin(admin.ModelAdmin):
+    list_display = ["team", "tournament", "status", "group", "seed"]
+    list_filter = ["status", "tournament"]
+
+
+@admin.register(TeamTournamentCourtPreference)
+class TeamTournamentCourtPreferenceAdmin(admin.ModelAdmin):
+    list_display = ["participation", "court"]
+    list_filter = ["court__tournament"]
 
 
 @admin.register(Match)

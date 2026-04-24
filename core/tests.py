@@ -1,11 +1,12 @@
 from django.contrib.auth.models import User
+from django.core.management import call_command
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
-from django.db import models
+from django.db import models, IntegrityError
 from datetime import timedelta
 
-from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player, OpenSlot, RescheduleRequest, TeamMembership
+from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player, OpenSlot, RescheduleRequest, TeamMembership, TeamTournamentParticipation, TeamTournamentCourtPreference
 from .scheduling import generate_fixtures
 from .standings import calculate_standings, advance_winner
 from .withdrawals import handle_withdrawal
@@ -140,6 +141,63 @@ class UXAndLogicRegressionTests(TestCase):
 		duplicate_messages = [str(m) for m in duplicate_response.context["messages"]]
 		self.assertTrue(any("skipped" in m.lower() for m in duplicate_messages))
 
+	def test_team_membership_supports_manager_role(self):
+		tournament = self._create_tournament(name="Role Model")
+		team = self._create_team(tournament, "Role Team")
+		manager_user = User.objects.create_user(username="role_manager", password="pass123")
+
+		membership = TeamMembership.objects.create(team=team, user=manager_user, role="manager")
+
+		self.assertEqual(membership.role, "manager")
+		self.assertIn("manager", dict(TeamMembership.ROLE_CHOICES))
+
+	def test_team_can_have_multiple_tournament_participations(self):
+		first = self._create_tournament(name="Participation A")
+		second = self._create_tournament(name="Participation B")
+		team = self._create_team(first, "Multi Team")
+
+		p1 = TeamTournamentParticipation.objects.create(team=team, tournament=first, group="A", seed=1)
+		p2 = TeamTournamentParticipation.objects.create(team=team, tournament=second, group="B", seed=2)
+
+		self.assertNotEqual(p1.pk, p2.pk)
+		self.assertEqual(team.participations.count(), 2)
+
+	def test_team_participation_is_unique_per_tournament(self):
+		tournament = self._create_tournament(name="Unique Participation")
+		team = self._create_team(tournament, "Unique Team")
+		TeamTournamentParticipation.objects.create(team=team, tournament=tournament)
+
+		with self.assertRaises(IntegrityError):
+			TeamTournamentParticipation.objects.create(team=team, tournament=tournament)
+
+	def test_participation_court_preference_is_unique(self):
+		tournament = self._create_tournament(name="Preference Uniqueness")
+		team = self._create_team(tournament, "Pref Team")
+		court = Court.objects.create(tournament=tournament, name="Center", is_available=True)
+		participation = TeamTournamentParticipation.objects.create(team=team, tournament=tournament)
+		TeamTournamentCourtPreference.objects.create(participation=participation, court=court)
+
+		with self.assertRaises(IntegrityError):
+			TeamTournamentCourtPreference.objects.create(participation=participation, court=court)
+
+	def test_backfill_team_participations_command_is_idempotent(self):
+		tournament = self._create_tournament(name="Backfill Tournament")
+		team = self._create_team(tournament, "Backfill Team")
+		court = Court.objects.create(tournament=tournament, name="Backfill Court", is_available=True)
+		team.preferred_courts.add(court)
+
+		call_command("backfill_team_participations")
+		first_participation_count = TeamTournamentParticipation.objects.count()
+		first_pref_count = TeamTournamentCourtPreference.objects.count()
+
+		call_command("backfill_team_participations")
+
+		self.assertEqual(TeamTournamentParticipation.objects.count(), first_participation_count)
+		self.assertEqual(TeamTournamentCourtPreference.objects.count(), first_pref_count)
+		self.assertTrue(
+			TeamTournamentParticipation.objects.filter(team=team, tournament=tournament).exists()
+		)
+
 	def test_add_court_availability_rejects_invalid_bulk_time_range(self):
 		tournament = self._create_tournament(name="Bad Availability")
 		court = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
@@ -238,10 +296,9 @@ class UXAndLogicRegressionTests(TestCase):
 		)
 
 		self.assertEqual(response.status_code, 200)
-		tournament.refresh_from_db()
-		self.assertEqual(tournament.status, "completed")
+		self.assertFalse(Tournament.objects.filter(pk=tournament.pk).exists())
 		msgs = [str(m) for m in response.context["messages"]]
-		self.assertTrue(any("archived" in m.lower() for m in msgs))
+		self.assertTrue(any("deleted" in m.lower() for m in msgs))
 
 	def test_non_organizer_cannot_delete_tournament(self):
 		tournament = self._create_tournament(name="Keep Me")

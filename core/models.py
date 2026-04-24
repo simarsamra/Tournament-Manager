@@ -185,6 +185,46 @@ class Team(models.Model):
         return self.name
 
 
+class TeamTournamentParticipation(models.Model):
+    STATUS_CHOICES = [
+        ("active", "Active"),
+        ("withdrawn", "Withdrawn"),
+    ]
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="participations")
+    tournament = models.ForeignKey(Tournament, on_delete=models.CASCADE, related_name="team_participations")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
+    withdrawn_at = models.DateTimeField(null=True, blank=True)
+    group = models.CharField(max_length=5, blank=True, default="")
+    seed = models.IntegerField(default=0)
+    availability_notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["tournament_id", "seed", "id"]
+        unique_together = [["team", "tournament"]]
+
+    def __str__(self):
+        return f"{self.team.name} @ {self.tournament.name}"
+
+
+class TeamTournamentCourtPreference(models.Model):
+    participation = models.ForeignKey(
+        TeamTournamentParticipation,
+        on_delete=models.CASCADE,
+        related_name="court_preferences",
+    )
+    court = models.ForeignKey(Court, on_delete=models.CASCADE, related_name="participation_preferences")
+
+    class Meta:
+        ordering = ["participation_id", "court_id"]
+        unique_together = [["participation", "court"]]
+
+    def __str__(self):
+        return f"{self.participation.team.name} prefers {self.court.name}"
+
+
 class Player(models.Model):
     team = models.ForeignKey(
         Team, on_delete=models.CASCADE, related_name="players"
@@ -201,6 +241,7 @@ class Player(models.Model):
 class TeamMembership(models.Model):
     ROLE_CHOICES = [
         ("captain", "Captain"),
+        ("manager", "Manager"),
         ("member", "Member"),
     ]
 

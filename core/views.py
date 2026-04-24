@@ -3176,13 +3176,12 @@ def delete_tournament(request, pk):
     tournament_name = tournament.name
     if request.session.get("selected_tournament_id") == tournament.pk:
         request.session.pop("selected_tournament_id", None)
-    tournament.status = "completed"
-    if tournament.completed_at is None:
-        tournament.completed_at = timezone.now()
-    tournament.save(update_fields=["status", "completed_at"])
 
-    log_action(request, "tournament_archived", f"Tournament '{tournament_name}' archived")
-    messages.success(request, f"Tournament '{tournament_name}' archived.")
+    # Delete only tournament-bound data; user accounts remain intact.
+    tournament.delete()
+
+    log_action(request, "tournament_deleted", f"Tournament '{tournament_name}' deleted")
+    messages.success(request, f"Tournament '{tournament_name}' deleted.")
     return redirect("dashboard")
 
 
