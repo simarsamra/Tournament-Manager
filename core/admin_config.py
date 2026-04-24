@@ -24,7 +24,7 @@ class CourtAvailabilityAdmin(admin.ModelAdmin):
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ["name", "tournament", "status", "user"]
+    list_display = ["name", "department"]
 
 
 @admin.register(TeamTournamentParticipation)

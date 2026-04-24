@@ -10,6 +10,10 @@
     <div style="display:flex;gap:0.75rem;align-items:center;">
         {% if not user_team %}
         <a href="{% url 'create_team' pk=tournament.pk %}" class="btn btn-primary">+ Create New Team</a>
+        <form method="post" action="{% url 'enter_existing_team' pk=tournament.pk %}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-outline">Enter Existing Team</button>
+        </form>
         {% endif %}
         <a href="{% url 'join_tournament_list' %}" class="btn btn-outline btn-sm">← Back</a>
     </div>

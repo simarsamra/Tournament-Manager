@@ -160,26 +160,8 @@ class CourtAvailability(models.Model):
 
 
 class Team(models.Model):
-    STATUS_CHOICES = [
-        ("active", "Active"),
-        ("withdrawn", "Withdrawn"),
-    ]
-
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="captained_teams")
-    tournament = models.ForeignKey(
-        Tournament, on_delete=models.CASCADE, related_name="teams"
-    )
-    name = models.CharField(max_length=100)
+    name = models.CharField(max_length=100, unique=True)
     department = models.CharField(max_length=120, blank=True, default="")
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
-    withdrawn_at = models.DateTimeField(null=True, blank=True)
-    group = models.CharField(max_length=5, blank=True, default="")
-    preferred_courts = models.ManyToManyField(Court, blank=True, related_name="preferred_by")
-    availability_notes = models.TextField(blank=True, default="")
-    seed = models.IntegerField(default=0)
-
-    class Meta:
-        unique_together = [["tournament", "name"], ["tournament", "user"]]
 
     def __str__(self):
         return self.name

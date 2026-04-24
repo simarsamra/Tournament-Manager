@@ -3,13 +3,30 @@ import math
 import itertools
 from datetime import datetime, timedelta, time
 from django.db import models
+from django.db.models import F
 from django.utils import timezone
-from .models import Match, Court, TimeSlot, Team, CourtAvailability
+from .models import Match, Court, TimeSlot, Team, CourtAvailability, TeamTournamentCourtPreference
+
+
+def _active_teams(tournament):
+    """Return active teams for a tournament via participation, annotated with seed/group."""
+    return list(
+        Team.objects.filter(
+            participations__tournament=tournament,
+            participations__status="active",
+        )
+        .annotate(
+            seed=F("participations__seed"),
+            group=F("participations__group"),
+        )
+        .order_by("participations__seed", "id")
+        .distinct()
+    )
 
 
 def generate_round_robin(tournament):
     """Generate all-play-all fixtures."""
-    teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+    teams = _active_teams(tournament)
     n = len(teams)
     if n < 2:
         return
@@ -47,7 +64,7 @@ def generate_round_robin(tournament):
 
 def generate_double_round_robin(tournament):
     """Generate home-and-away round-robin fixtures."""
-    teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+    teams = _active_teams(tournament)
     n = len(teams)
     if n < 2:
         return
@@ -111,7 +128,7 @@ def generate_knockout(tournament, teams=None, start_match=1, bracket_type="winne
                       round_offset=0, group=""):
     """Generate single-elimination bracket."""
     if teams is None:
-        teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+        teams = _active_teams(tournament)
 
     n = len(teams)
     if n < 2:
@@ -263,7 +280,7 @@ def generate_knockout_placeholders(
 
 def generate_hybrid(tournament):
     """Generate group stage (round robin) then knockout brackets."""
-    teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+    teams = _active_teams(tournament)
     n = len(teams)
     num_groups = tournament.num_groups
 
@@ -280,8 +297,10 @@ def generate_hybrid(tournament):
         else:
             g = group_keys[num_groups - 1 - (idx % num_groups)]
         groups[g].append(team)
-        team.group = g
-        team.save(update_fields=["group"])
+        from .models import TeamTournamentParticipation
+        TeamTournamentParticipation.objects.filter(
+            team=team, tournament=tournament
+        ).update(group=g)
 
     # Generate round-robin for each group
     match_num = 1
@@ -345,14 +364,14 @@ def generate_hybrid(tournament):
 def generate_double_elimination(tournament):
     """Generate double elimination bracket (winners + losers)."""
     # Start with a standard winners bracket
-    teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+    teams = _active_teams(tournament)
     generate_knockout(tournament, teams=teams, bracket_type="winners")
     # Losers bracket matches are created dynamically as teams are eliminated
 
 
 def generate_consolation(tournament):
     """Generate main knockout bracket; consolation is generated after round 1 completes."""
-    teams = list(tournament.teams.filter(status="active").order_by("seed", "id"))
+    teams = _active_teams(tournament)
     generate_knockout(tournament, teams=teams, bracket_type="winners")
 
 
@@ -416,7 +435,7 @@ def generate_fixtures(tournament):
 
 def estimate_required_matches(tournament, team_count=None):
     """Estimate how many match slots are needed for a tournament format."""
-    n = team_count if team_count is not None else tournament.teams.filter(status="active").count()
+    n = team_count if team_count is not None else tournament.team_participations.filter(status="active").count()
     if n < 2:
         return 0
 
@@ -469,7 +488,7 @@ def _assign_schedule(tournament, matches_data):
     for md in matches_data:
         t1 = md["team1"]
         t2 = md["team2"]
-        result = _find_preferred_slot(t1, t2, slots, used_slots, matches_to_create)
+        result = _find_preferred_slot(t1, t2, slots, used_slots, matches_to_create, tournament)
         if result:
             start_t, end_t, court = result
             md["scheduled_time"] = start_t
@@ -507,14 +526,27 @@ def _has_team_conflict(t1, t2, start, end, used_slots, pending_matches):
     return False
 
 
-def _find_preferred_slot(t1, t2, slots, used_slots, pending_matches):
+def _find_preferred_slot(t1, t2, slots, used_slots, pending_matches, tournament=None):
     """Find the best available slot using 3-tier preference matching.
 
     Tries: 1) mutual preferred courts, 2) any preferred court, 3) any available slot.
     Returns (start_time, end_time, court) or None if no slot found.
     """
-    t1_prefs = set(t1.preferred_courts.values_list("id", flat=True)) if t1 else set()
-    t2_prefs = set(t2.preferred_courts.values_list("id", flat=True)) if t2 else set()
+    if tournament is None and slots:
+        tournament = slots[0][2].tournament
+
+    def _preferred_court_ids(team):
+        if not team or not tournament:
+            return set()
+        return set(
+            TeamTournamentCourtPreference.objects.filter(
+                participation__team=team,
+                participation__tournament=tournament,
+            ).values_list("court_id", flat=True)
+        )
+
+    t1_prefs = _preferred_court_ids(t1)
+    t2_prefs = _preferred_court_ids(t2)
     mutual_prefs = t1_prefs & t2_prefs
     any_prefs = t1_prefs | t2_prefs
 
@@ -628,7 +660,7 @@ def _assign_schedule_to_matches(tournament, matches):
             continue
 
         result = _find_preferred_slot(
-            match.team1, match.team2, slots, used_slots, scheduled_matches
+            match.team1, match.team2, slots, used_slots, scheduled_matches, tournament
         )
         if result:
             start_t, end_t, court = result
@@ -662,7 +694,7 @@ def _assign_schedule_to_group_stage(tournament):
     scheduled_matches = []
 
     for match in matches:
-        result = _find_preferred_slot(match.team1, match.team2, slots, used_slots, scheduled_matches)
+        result = _find_preferred_slot(match.team1, match.team2, slots, used_slots, scheduled_matches, tournament)
         if result:
             start_t, end_t, court = result
             match.scheduled_time = start_t
@@ -774,7 +806,7 @@ def _assign_schedule_to_existing(tournament):
 
     for match in matches:
         result = _find_preferred_slot(
-            match.team1, match.team2, slots, used_slots, scheduled_matches
+            match.team1, match.team2, slots, used_slots, scheduled_matches, tournament
         )
         if result:
             start_t, end_t, court = result

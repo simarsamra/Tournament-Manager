@@ -1,15 +1,19 @@
 """Withdrawal handling logic."""
 from django.utils import timezone
-from .models import Match, Team
+from .models import Match, Team, TeamTournamentParticipation
 from .standings import advance_winner
 from .audit import log_action
 
 
 def handle_withdrawal(request, team, tournament):
     """Process a team withdrawal."""
-    team.status = "withdrawn"
-    team.withdrawn_at = timezone.now()
-    team.save(update_fields=["status", "withdrawn_at"])
+    participation = TeamTournamentParticipation.objects.filter(
+        team=team, tournament=tournament
+    ).first()
+    if participation:
+        participation.status = "withdrawn"
+        participation.withdrawn_at = timezone.now()
+        participation.save(update_fields=["status", "withdrawn_at"])
 
     policy = tournament.withdrawal_policy
 
