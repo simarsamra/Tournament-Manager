@@ -48,7 +48,8 @@
 
             {% if my_teams_sidebar %}
             <div class="sidebar-section" style="margin-top:1rem;">My Teams</div>
-            <a href="{% url 'teams' %}#my-teams" class="{% if request.resolver_match.url_name == 'teams' or request.resolver_match.url_name == 'team_detail' or request.resolver_match.url_name == 'create_standalone_team' %}active{% endif %}">🛠️ Manage My Teams</a>
+            <a href="{% url 'teams' %}" class="{% if request.resolver_match.url_name == 'teams' or request.resolver_match.url_name == 'team_detail' or request.resolver_match.url_name == 'create_standalone_team' %}active{% endif %}">🛠️ Manage My Teams</a>
+            <a href="{% url 'create_standalone_team' %}" class="{% if request.resolver_match.url_name == 'create_standalone_team' %}active{% endif %}">➕ Create New Team</a>
             {% for owned_team in my_teams_sidebar %}
             <a href="{% url 'team_detail' pk=owned_team.pk %}" class="{% if request.resolver_match.url_name == 'team_detail' and team and team.pk == owned_team.pk %}active{% endif %}">🏅 {{ owned_team.name }}</a>
             {% endfor %}

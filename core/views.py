@@ -2557,10 +2557,8 @@ def teams_view(request):
             participation = team.participations.filter(tournament=tournament).first()
             team.group = participation.group if participation else ""
 
-    my_teams = Team.objects.filter(memberships__user=request.user).distinct().order_by("name")
     return render(request, "core/teams.html", {
         "tournament": tournament, "teams": teams,
-        "my_teams": my_teams,
         "is_organizer": _is_organizer(request.user),
         **_tournament_context(request, tournament),
     })
