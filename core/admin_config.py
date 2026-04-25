@@ -3,6 +3,7 @@ from .models import (
     Tournament, Court, TimeSlot, Team, Match,
     RescheduleRequest, OpenSlot, AuditLog, BackupRecord, CourtAvailability,
     TeamTournamentParticipation, TeamTournamentCourtPreference,
+    TournamentIndividualRegistration,
 )
 
 
@@ -24,13 +25,31 @@ class CourtAvailabilityAdmin(admin.ModelAdmin):
 
 @admin.register(Team)
 class TeamAdmin(admin.ModelAdmin):
-    list_display = ["name", "department"]
+    list_display = ["name", "department", "is_internal", "sport_type"]
+    list_filter = ["is_internal", "sport_type"]
 
 
 @admin.register(TeamTournamentParticipation)
 class TeamTournamentParticipationAdmin(admin.ModelAdmin):
     list_display = ["team", "tournament", "status", "group", "seed"]
-    list_filter = ["status", "tournament"]
+    list_filter = ["status", "tournament", "team__is_internal"]
+
+
+@admin.register(TournamentIndividualRegistration)
+class TournamentIndividualRegistrationAdmin(admin.ModelAdmin):
+    list_display = [
+        "display_name",
+        "user",
+        "tournament",
+        "status",
+        "shadow_team",
+        "group",
+        "seed",
+        "created_at",
+    ]
+    list_filter = ["status", "tournament", "tournament__registration_mode"]
+    search_fields = ["display_name", "user__username"]
+    raw_id_fields = ["user", "shadow_team"]
 
 
 @admin.register(TeamTournamentCourtPreference)

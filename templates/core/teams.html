@@ -2,11 +2,11 @@
 {% block title %}Teams{% endblock %}
 {% block page_header %}Teams{% endblock %}
 {% block content %}
-<h1 class="page-title">{% if tournament %}{{ tournament.name }} — {% endif %}Teams</h1>
+<h1 class="page-title">{% if tournament %}{{ tournament.name }} — {% endif %}{% if tournament.registration_mode == "individual" %}Participants{% else %}Teams{% endif %}</h1>
 
 {% if tournament %}
 <div class="card mb-2">
-    <div class="card-header">Teams in Selected Tournament ({{ teams|length }})</div>
+    <div class="card-header">{% if tournament.registration_mode == "individual" %}Participants{% else %}Teams{% endif %} in selected tournament ({{ teams|length }})</div>
     <div class="table-container">
     <table>
         <thead>
@@ -22,7 +22,7 @@
         <tbody>
             {% for t in teams %}
             <tr>
-                <td><strong>{{ t.name }}</strong></td>
+                <td><strong>{{ t.listing_name }}</strong></td>
                 <td>{{ t.get_sport_type_display }}</td>
                 <td class="text-muted">{{ t.department|default:"-" }}</td>
                 <td style="font-size:0.85rem;color:#666;">
@@ -32,7 +32,7 @@
                 <td><a href="{% url 'team_detail' pk=t.pk %}" class="btn btn-outline btn-sm">View</a></td>
             </tr>
             {% empty %}
-            <tr><td colspan="{% if tournament.format == 'hybrid' %}6{% else %}5{% endif %}" class="text-center text-muted">No active teams in the selected tournament.</td></tr>
+            <tr><td colspan="{% if tournament.format == 'hybrid' %}6{% else %}5{% endif %}" class="text-center text-muted">No active {% if tournament.registration_mode == "individual" %}participants{% else %}teams{% endif %} in the selected tournament.</td></tr>
             {% endfor %}
         </tbody>
     </table>

@@ -23,6 +23,7 @@ from .models import (
     Tournament, Court, TimeSlot, Team, Match,
     RescheduleRequest, NoShowReport, OpenSlot, AuditLog, BackupRecord, Player, CourtAvailability,
     TeamMembership, TeamTournamentParticipation, TeamTournamentCourtPreference,
+    TournamentIndividualRegistration,
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
@@ -97,7 +98,7 @@ def _get_tournament(request=None):
             active_tournaments = tournaments.filter(status="active")
             user_active = None
             for t in active_tournaments:
-                if request.user.memberships.filter(team__participations__tournament=t).exists():
+                if _is_user_enrolled_in_tournament(request.user, t):
                     user_active = t
                     break
             if user_active:
@@ -107,13 +108,9 @@ def _get_tournament(request=None):
             # Honour session selection if they have a membership there
             selected_id = request.session.get("selected_tournament_id")
             if selected_id:
-                has_membership = request.user.memberships.filter(
-                    team__participations__tournament_id=selected_id
-                ).exists()
-                if has_membership:
-                    t = tournaments.filter(pk=selected_id).first()
-                    if t:
-                        return t
+                t_obj = tournaments.filter(pk=selected_id).first()
+                if t_obj and _is_user_enrolled_in_tournament(request.user, t_obj):
+                    return t_obj
             
             # Fall back to the user's first team's most recent tournament
             team = _get_team(request.user)
@@ -152,7 +149,7 @@ def _tournament_context(request, tournament=None):
         "has_dual_roles": has_dual_roles,
         "view_mode": view_mode,
         "my_teams_sidebar": list(
-            Team.objects.filter(memberships__user=request.user)
+            Team.objects.filter(memberships__user=request.user, is_internal=False)
             .distinct()
             .order_by("name")
         ),
@@ -166,9 +163,7 @@ def _tournament_context(request, tournament=None):
         return ctx
     
     # Non-organiser: supply switcher data when enrolled in multiple tournaments
-    user_tournament_ids = list(
-        request.user.memberships.values_list("team__participations__tournament_id", flat=True).distinct()
-    )
+    user_tournament_ids = _get_user_tournament_ids(request.user)
     if len(user_tournament_ids) > 1:
         user_tournaments = list(
             Tournament.objects.filter(pk__in=user_tournament_ids).order_by("-created_at")
@@ -196,20 +191,134 @@ def _public_tournament_context(tournament=None):
     }
 
 
+def _get_user_tournament_ids(user):
+    """Tournament IDs the user is enrolled in (team memberships or individual registrations)."""
+    ids = set(
+        user.memberships.filter(team__is_internal=False).values_list(
+            "team__participations__tournament_id", flat=True
+        ).distinct()
+    )
+    ids.update(
+        TournamentIndividualRegistration.objects.filter(user=user, status="active").values_list(
+            "tournament_id", flat=True
+        )
+    )
+    return list(ids)
+
+
+def _get_individual_registration(user, tournament):
+    if not tournament or tournament.registration_mode != "individual":
+        return None
+    return (
+        TournamentIndividualRegistration.objects.filter(
+            user=user, tournament=tournament, status="active"
+        )
+        .select_related("shadow_team", "tournament")
+        .first()
+    )
+
+
+def _is_user_enrolled_in_tournament(user, tournament):
+    if tournament.registration_mode == "individual":
+        if TournamentIndividualRegistration.objects.filter(
+            user=user, tournament=tournament, status="active"
+        ).exists():
+            return True
+        return user.memberships.filter(team__participations__tournament=tournament).exists()
+    return user.memberships.filter(
+        team__participations__tournament=tournament,
+        team__is_internal=False,
+    ).exists()
+
+
+def _ensure_shadow_team_for_registration(registration, sport_type=None):
+    """Create or sync internal shadow Team + participation for an individual registration."""
+    tournament = registration.tournament
+    sport = sport_type or tournament.sport_type or "other"
+    if registration.shadow_team_id:
+        team = registration.shadow_team
+        participation, _ = TeamTournamentParticipation.objects.get_or_create(
+            team=team,
+            tournament=tournament,
+            defaults={
+                "status": registration.status,
+                "group": registration.group or "",
+                "seed": registration.seed,
+            },
+        )
+        TeamTournamentParticipation.objects.filter(pk=participation.pk).update(
+            status=registration.status,
+            group=registration.group or "",
+            seed=registration.seed,
+            withdrawn_at=registration.withdrawn_at,
+        )
+        return team
+
+    base = f"__tm_shadow_{tournament.pk}_{registration.user_id}_{registration.pk}"
+    name = base[:100]
+    idx = 0
+    while Team.objects.filter(name=name).exists():
+        idx += 1
+        suffix = f"_{idx}"
+        name = (base[: max(1, 100 - len(suffix))] + suffix)[:100]
+    team = Team.objects.create(name=name, sport_type=sport, is_internal=True)
+    TeamTournamentParticipation.objects.create(
+        team=team,
+        tournament=tournament,
+        status=registration.status,
+        group=registration.group or "",
+        seed=registration.seed,
+        withdrawn_at=registration.withdrawn_at,
+    )
+    registration.shadow_team = team
+    registration.save(update_fields=["shadow_team", "updated_at"])
+    Player.objects.get_or_create(team=team, name=registration.display_name)
+    return team
+
+
+def _team_display_label(tournament, team):
+    if not team:
+        return "TBD"
+    if tournament and tournament.registration_mode == "individual":
+        reg = TournamentIndividualRegistration.objects.filter(
+            tournament=tournament, shadow_team=team, status="active"
+        ).first()
+        if reg:
+            return reg.display_name
+    return team.name
+
+
 def _get_team(user, tournament=None):
-    """Return the team the user belongs to, optionally scoped to a tournament."""
+    """Return the user's competitor Team for match flows (membership team or individual shadow team)."""
     if tournament is not None:
+        if tournament.registration_mode == "individual":
+            reg = _get_individual_registration(user, tournament)
+            if reg and reg.shadow_team_id:
+                return reg.shadow_team
+            membership = user.memberships.filter(
+                team__participations__tournament=tournament
+            ).select_related("team").first()
+            return membership.team if membership else None
         membership = user.memberships.filter(
-            team__participations__tournament=tournament
+            team__participations__tournament=tournament,
+            team__is_internal=False,
         ).select_related("team").first()
         return membership.team if membership else None
     membership = (
-        user.memberships
+        user.memberships.filter(team__is_internal=False)
         .select_related("team")
         .order_by("role", "joined_at")
         .first()
     )
-    return membership.team if membership else None
+    if membership:
+        return membership.team
+    reg = (
+        TournamentIndividualRegistration.objects.filter(user=user, status="active", shadow_team__isnull=False)
+        .select_related("shadow_team")
+        .order_by("-updated_at")
+        .first()
+    )
+    return reg.shadow_team if reg else None
 
 
 def _is_captain(user, team):
@@ -257,11 +366,19 @@ def _auto_end_date(tournament):
     start = tournament.start_date
     if not start:
         return None
-    team_count = tournament.expected_teams_count or tournament.team_participations.filter(status="active").count()
+    if tournament.pk:
+        team_count = tournament.expected_teams_count or tournament.team_participations.filter(
+            status="active", team__is_internal=False
+        ).count()
+    else:
+        team_count = tournament.expected_teams_count or 0
     total_matches = estimate_required_matches(tournament, team_count)
     if total_matches <= 0:
         return start
-    courts = max(1, tournament.courts.filter(is_available=True).count())
+    if tournament.pk:
+        courts = max(1, tournament.courts.filter(is_available=True).count())
+    else:
+        courts = 1
     duration = max(5, tournament.default_match_duration or 30)
     matches_per_court_per_day = max(1, 480 // duration)   # 8-hour day
     matches_per_day = matches_per_court_per_day * courts
@@ -808,17 +925,18 @@ def join_tournament_list_view(request):
         status="registration_open"
     ).order_by("start_date", "created_at")
 
-    # Annotate each tournament with the user's current team (if any)
-    user_tournament_ids = set(
-        request.user.memberships.values_list("team__participations__tournament_id", flat=True)
-    )
+    user_tournament_ids = set(_get_user_tournament_ids(request.user))
 
     tournament_list = []
     for t in open_tournaments:
+        if t.registration_mode == "individual":
+            entry_count = t.individual_registrations.filter(status="active").count()
+        else:
+            entry_count = t.team_participations.filter(status="active", team__is_internal=False).count()
         tournament_list.append({
             "tournament": t,
             "already_joined": t.pk in user_tournament_ids,
-            "team_count": t.team_participations.filter(status="active").count(),
+            "team_count": entry_count,
         })
 
     return render(request, "core/join_tournament_list.html", {
@@ -835,42 +953,63 @@ def join_tournament_view(request, pk):
         messages.error(request, "Registration is currently closed for this tournament.")
         return redirect("join_tournament_list")
 
-    # Check if this user already belongs to a team in this tournament
     existing_membership = request.user.memberships.filter(
         team__participations__tournament=tournament
     ).select_related("team").first()
-    user_team = existing_membership.team if existing_membership else None
-
-    # Build annotated team list
-    teams = (
-        Team.objects.filter(
-            participations__tournament=tournament,
-            participations__status="active",
-        )
-        .prefetch_related("memberships")
-        .distinct()
-        .order_by("name")
+    user_registration = _get_individual_registration(request.user, tournament)
+    user_team = (
+        existing_membership.team
+        if tournament.registration_mode == "team" and existing_membership
+        else None
     )
+
     players_per_team = tournament.players_per_team
     registration_mode = tournament.registration_mode
 
     team_list = []
-    for team in teams:
-        count = team.memberships.count()
-        is_full = registration_mode == "individual" or count >= players_per_team
-        is_user_member = existing_membership and existing_membership.team_id == team.pk
-        team_list.append({
-            "team": team,
-            "member_count": count,
-            "players_per_team": players_per_team,
-            "is_full": is_full,
-            "is_user_member": is_user_member,
-        })
+    participant_list = []
+
+    if registration_mode == "individual":
+        regs = (
+            tournament.individual_registrations.filter(status="active")
+            .select_related("user", "shadow_team")
+            .order_by("display_name", "id")
+        )
+        for reg in regs:
+            participant_list.append({
+                "registration": reg,
+                "display_name": reg.display_name,
+                "is_self": reg.user_id == request.user.pk,
+            })
+    else:
+        teams = (
+            Team.objects.filter(
+                participations__tournament=tournament,
+                participations__status="active",
+                is_internal=False,
+            )
+            .prefetch_related("memberships")
+            .distinct()
+            .order_by("name")
+        )
+        for team in teams:
+            count = team.memberships.count()
+            is_full = count >= players_per_team
+            is_user_member = existing_membership and existing_membership.team_id == team.pk
+            team_list.append({
+                "team": team,
+                "member_count": count,
+                "players_per_team": players_per_team,
+                "is_full": is_full,
+                "is_user_member": is_user_member,
+            })
 
     return render(request, "core/join_tournament.html", {
         "tournament": tournament,
         "team_list": team_list,
+        "participant_list": participant_list,
         "user_team": user_team,
+        "user_registration": user_registration,
         "players_per_team": players_per_team,
         "registration_mode": registration_mode,
     })
@@ -895,8 +1034,7 @@ def join_team_view(request, tournament_pk, team_pk):
         messages.error(request, "Registration is currently closed for this tournament.")
         return redirect("join_tournament_list")
 
-    # Already in a team in this tournament?
-    if request.user.memberships.filter(team__participations__tournament=tournament).exists():
+    if _is_user_enrolled_in_tournament(request.user, tournament):
         messages.error(request, "You are already in a team for this tournament.")
         return redirect("join_tournament", pk=tournament_pk)
 
@@ -925,9 +1063,8 @@ def create_team_view(request, pk):
         messages.error(request, "Registration is currently closed for this tournament.")
         return redirect("join_tournament_list")
 
-    # Already in a team in this tournament?
-    if request.user.memberships.filter(team__participations__tournament=tournament).exists():
-        messages.error(request, "You are already in a team for this tournament.")
+    if _is_user_enrolled_in_tournament(request.user, tournament):
+        messages.error(request, "You are already registered for this tournament.")
         return redirect("join_tournament", pk=pk)
 
     if request.method == "POST":
@@ -935,38 +1072,38 @@ def create_team_view(request, pk):
         if form.is_valid():
             if tournament.registration_mode == "individual":
                 requested_name = form.cleaned_data.get("participant_name", "")
-                team_name = _resolve_individual_team_name(request.user, requested_name=requested_name)
+                display_name = _resolve_individual_team_name(request.user, requested_name=requested_name)
 
-                existing_captain_team = Team.objects.filter(
-                    name__iexact=team_name,
-                    memberships__user=request.user,
-                    memberships__role="captain",
-                ).first()
-                if existing_captain_team:
-                    team = existing_captain_team
-                elif Team.objects.filter(name__iexact=team_name).exists():
-                    form.add_error("participant_name", "That name is already in use. Please choose a different player name.")
+                if TournamentIndividualRegistration.objects.filter(
+                    tournament=tournament, display_name__iexact=display_name
+                ).exclude(user=request.user).exists():
+                    form.add_error(
+                        "participant_name",
+                        "That name is already in use. Please choose a different player name.",
+                    )
                     return render(request, "core/create_team.html", {
                         "form": form,
                         "tournament": tournament,
                         **_tournament_context(request, tournament),
                     })
-                else:
-                    team = Team.objects.create(name=team_name, sport_type=tournament.sport_type)
-                    TeamMembership.objects.create(team=team, user=request.user, role="captain")
 
-                TeamTournamentParticipation.objects.get_or_create(
-                    team=team,
+                registration, _ = TournamentIndividualRegistration.objects.update_or_create(
+                    user=request.user,
                     tournament=tournament,
-                    defaults={"status": "active"},
+                    defaults={
+                        "display_name": display_name,
+                        "status": "active",
+                        "withdrawn_at": None,
+                    },
                 )
+                _ensure_shadow_team_for_registration(registration, tournament.sport_type)
                 log_action(
                     request,
                     "individual_registered",
-                    f"Player '{team_name}' registered for '{tournament.name}'",
+                    f"Player '{display_name}' registered for '{tournament.name}'",
                     tournament=tournament,
                 )
-                messages.success(request, f"You are registered as '{team_name}'.")
+                messages.success(request, f"You are registered as '{display_name}'.")
                 return redirect("dashboard")
 
             team_name = form.cleaned_data["team_name"]
@@ -1038,6 +1175,11 @@ def dashboard_view(request):
         _expire_no_show_reports(tournament)
         _expire_pending_score_disputes(tournament)
     team = _get_team(request.user, tournament=tournament)
+    individual_registration = (
+        _get_individual_registration(request.user, tournament)
+        if tournament and tournament.registration_mode == "individual"
+        else None
+    )
     is_organizer = _is_organizer(request.user)
     
     # For dual-role users, check view preference
@@ -1062,9 +1204,16 @@ def dashboard_view(request):
         if open_count > 0:
             return redirect("join_tournament_list")
 
+    dashboard_display_name = (
+        individual_registration.display_name
+        if individual_registration
+        else (team.name if team else "")
+    )
     context = {
         "tournament": tournament,
         "team": team,
+        "individual_registration": individual_registration,
+        "dashboard_display_name": dashboard_display_name,
         "is_organizer": is_organizer,
         "is_captain": _is_captain(request.user, team),
         "has_dual_roles": has_dual_roles,
@@ -1100,9 +1249,15 @@ def dashboard_view(request):
         )
 
         # Recent results: last 5, most recent first (for display)
-        context["recent_matches"] = team_matches_qs.filter(
-            status__in=["confirmed", "forfeited"]
-        ).select_related("team1", "team2", "winner").order_by("-updated_at")[:5]
+        recent_matches = list(
+            team_matches_qs.filter(status__in=["confirmed", "forfeited"])
+            .select_related("team1", "team2", "winner")
+            .order_by("-updated_at")[:5]
+        )
+        for m in recent_matches:
+            opp = m.team2 if m.team1_id == team.pk else m.team1
+            m.opponent_display = _team_display_label(tournament, opp)
+        context["recent_matches"] = recent_matches
 
         context["pending_reschedules"] = RescheduleRequest.objects.filter(
             match__in=team_matches_qs, status="pending",
@@ -1121,6 +1276,8 @@ def dashboard_view(request):
         team_standing = None
         if tournament.format in ("round_robin", "double_round_robin", "hybrid"):
             standings = calculate_standings(tournament)
+            for s in standings:
+                s["display_label"] = _team_display_label(tournament, s["team"])
             team_standing = next((s for s in standings if s["team"].pk == team.pk), None)
         context["team_standing"] = team_standing
         
@@ -1131,12 +1288,27 @@ def dashboard_view(request):
                 context["tournament_champion"] = standings[0]["team"] if standings else tournament.champion
                 context["tournament_runner_up_1"] = standings[1]["team"] if len(standings) > 1 else None
                 context["tournament_runner_up_2"] = standings[2]["team"] if len(standings) > 2 else None
+                context["tournament_champion_label"] = standings[0].get("display_label") or _team_display_label(
+                    tournament, standings[0]["team"]
+                )
+                context["tournament_runner_up_1_label"] = (
+                    standings[1].get("display_label")
+                    if len(standings) > 1
+                    else None
+                )
+                context["tournament_runner_up_2_label"] = (
+                    standings[2].get("display_label")
+                    if len(standings) > 2
+                    else None
+                )
             else:
                 # For bracket formats, use tournament.champion
                 context["tournament_champion"] = tournament.champion
                 # For bracket formats, we might not have clear 2nd/3rd, so leave empty
                 context["tournament_runner_up_1"] = None
                 context["tournament_runner_up_2"] = None
+                if tournament.champion:
+                    context["tournament_champion_label"] = _team_display_label(tournament, tournament.champion)
 
         # Nearby standings rows: up to 2 above + self + 2 below
         if standings and team_standing:
@@ -1202,7 +1374,7 @@ def dashboard_view(request):
                 score = "–"
             trajectory.append({
                 "match_number": m.match_number,
-                "opponent": opponent.name if opponent else "TBD",
+                "opponent": _team_display_label(tournament, opponent) if opponent else "TBD",
                 "result": result,
                 "score": score,
                 "pts_earned": pts_earned,
@@ -1233,6 +1405,9 @@ def dashboard_view(request):
                         else:
                             h2h["draws"] += 1
         context["next_opponent"] = next_opponent
+        context["next_opponent_label"] = (
+            _team_display_label(tournament, next_opponent) if next_opponent else None
+        )
         context["next_opponent_standing"] = next_opponent_standing
         context["h2h"] = h2h
 
@@ -1269,14 +1444,25 @@ def dashboard_view(request):
             )
     # Pre-tournament registration context for team members
     if tournament and team and tournament.status not in ("active", "completed"):
-        member_count = team.memberships.count()
-        context["team_member_count"] = member_count
-        context["players_needed"] = max(0, tournament.players_per_team - member_count)
-        context["is_team_full"] = member_count >= tournament.players_per_team
-        context["registered_teams_count"] = tournament.team_participations.count()
-        context["team_members"] = list(
-            team.memberships.select_related("user").order_by("role", "joined_at")
-        )
+        if tournament.registration_mode == "individual" and individual_registration:
+            context["team_member_count"] = 1
+            context["players_needed"] = 0
+            context["is_team_full"] = True
+            context["registered_teams_count"] = tournament.individual_registrations.filter(
+                status="active"
+            ).count()
+            context["team_members"] = []
+        else:
+            member_count = team.memberships.count()
+            context["team_member_count"] = member_count
+            context["players_needed"] = max(0, tournament.players_per_team - member_count)
+            context["is_team_full"] = member_count >= tournament.players_per_team
+            context["registered_teams_count"] = tournament.team_participations.filter(
+                team__is_internal=False
+            ).count()
+            context["team_members"] = list(
+                team.memberships.select_related("user").order_by("role", "joined_at")
+            )
 
     if is_organizer:
         all_tournaments = _get_available_tournaments()
@@ -1287,7 +1473,12 @@ def dashboard_view(request):
         ).count()
         context["completed_tournaments_count"] = all_tournaments.filter(status="completed").count()
     if tournament and is_organizer:
-        context["total_teams"] = tournament.team_participations.count()
+        if tournament.registration_mode == "individual":
+            context["total_teams"] = tournament.individual_registrations.filter(status="active").count()
+            context["roster_label"] = "Participants"
+        else:
+            context["total_teams"] = tournament.team_participations.filter(team__is_internal=False).count()
+            context["roster_label"] = "Teams"
         context["total_matches"] = tournament.matches.count()
         context["confirmed_matches"] = tournament.matches.filter(status="confirmed").count()
         context["pending_matches_count"] = tournament.matches.filter(status="pending_confirmation").count()
@@ -1345,7 +1536,13 @@ def tournament_config(request, pk):
     )
 
     for participation in team_participations:
-        participation.member_count = participation.team.memberships.count()
+        if participation.team.is_internal:
+            reg = TournamentIndividualRegistration.objects.filter(
+                shadow_team=participation.team, tournament=tournament
+            ).first()
+            participation.member_count = 1 if reg else 0
+        else:
+            participation.member_count = participation.team.memberships.count()
         participation.preferred_court_names = list(
             TeamTournamentCourtPreference.objects.filter(participation=participation)
             .select_related("court")
@@ -1730,9 +1927,7 @@ def select_tournament(request):
         return redirect(next_url)
 
     if not _is_organizer(request.user):
-        # Non-organisers can only switch to tournaments they're enrolled in
-        enrolled = request.user.memberships.filter(team__participations__tournament=tournament).exists()
-        if not enrolled:
+        if not _is_user_enrolled_in_tournament(request.user, tournament):
             messages.error(request, "You are not enrolled in that tournament.")
             return redirect(next_url)
 
@@ -1769,11 +1964,6 @@ def test_maker_view(request):
                 messages.error(request, "Team count and members per team must be valid numbers.")
                 return redirect("test_maker")
 
-            created_teams = 0
-            created_users = 0
-            created_memberships = 0
-            created_participations = 0
-
             def _next_unique_username(base_username):
                 if not User.objects.filter(username=base_username).exists():
                     return base_username
@@ -1782,73 +1972,128 @@ def test_maker_view(request):
                     suffix += 1
                 return f"{base_username}_{suffix}"
 
-            for idx in range(1, team_count + 1):
-                team_name = f"{team_prefix}{idx}"
-                if TeamTournamentParticipation.objects.filter(
-                    team__name=team_name,
+            if tournament.registration_mode == "individual":
+                created_regs = 0
+                created_users = 0
+                created_shadow_teams = 0
+                for idx in range(1, team_count + 1):
+                    display_name = f"{team_prefix}{idx}"[:100]
+                    if tournament.individual_registrations.filter(display_name__iexact=display_name).exists():
+                        continue
+                    captain_username = _next_unique_username(f"{username_prefix}{idx}p1")
+                    captain = User.objects.create_user(
+                        username=captain_username,
+                        password=default_password,
+                        first_name=display_name,
+                    )
+                    created_users += 1
+                    reg = TournamentIndividualRegistration.objects.create(
+                        tournament=tournament,
+                        user=captain,
+                        display_name=display_name,
+                        status="active",
+                    )
+                    created_regs += 1
+                    shadow = _ensure_shadow_team_for_registration(reg, tournament.sport_type)
+                    if shadow:
+                        created_shadow_teams += 1
+                log_action(
+                    request,
+                    "test_maker_create_teams",
+                    (
+                        f"Individual test data: {created_regs} registration(s), {created_users} user(s), "
+                        f"{created_shadow_teams} shadow competitor(s)"
+                    ),
                     tournament=tournament,
-                ).exists():
-                    continue
-
-                captain_username = _next_unique_username(f"{username_prefix}{idx}p1")
-                captain = User.objects.create_user(
-                    username=captain_username,
-                    password=default_password,
-                    first_name=team_name,
                 )
-                created_users += 1
-
-                # Reuse existing team by name if already present (e.g. from another tournament)
-                team, team_created = Team.objects.get_or_create(name=team_name)
-                if team_created:
-                    created_teams += 1
-
-                _, participation_created = TeamTournamentParticipation.objects.get_or_create(
-                    team=team,
-                    tournament=tournament,
-                    defaults={"status": "active"},
+                messages.success(
+                    request,
+                    (
+                        f"Test participants created: {created_regs} registration(s), {created_users} user(s), "
+                        f"{created_shadow_teams} internal competitor(s)."
+                    ),
                 )
-                if participation_created:
-                    created_participations += 1
+            else:
+                created_teams = 0
+                created_users = 0
+                created_memberships = 0
+                created_participations = 0
 
-                TeamMembership.objects.create(team=team, user=captain, role="captain")
-                created_memberships += 1
-                Player.objects.get_or_create(team=team, name=captain_username)
+                for idx in range(1, team_count + 1):
+                    team_name = f"{team_prefix}{idx}"
+                    if TeamTournamentParticipation.objects.filter(
+                        team__name=team_name,
+                        tournament=tournament,
+                    ).exists():
+                        continue
 
-                for member_idx in range(2, members_per_team + 1):
-                    member_username = _next_unique_username(f"{username_prefix}{idx}p{member_idx}")
-                    member = User.objects.create_user(
-                        username=member_username,
+                    captain_username = _next_unique_username(f"{username_prefix}{idx}p1")
+                    captain = User.objects.create_user(
+                        username=captain_username,
                         password=default_password,
                         first_name=team_name,
                     )
                     created_users += 1
-                    TeamMembership.objects.create(team=team, user=member, role="member")
-                    created_memberships += 1
-                    Player.objects.get_or_create(team=team, name=member_username)
 
-            log_action(
-                request,
-                "test_maker_create_teams",
-                (
-                    f"Created {created_teams} team(s), {created_users} user(s), "
-                    f"{created_memberships} membership(s), {created_participations} participation(s)"
-                ),
-                tournament=tournament,
-            )
-            messages.success(
-                request,
-                (
-                    f"Test data created: {created_teams} team(s), {created_users} user(s), "
-                    f"{created_memberships} membership(s), {created_participations} participation(s)."
-                ),
-            )
+                    team, team_created = Team.objects.get_or_create(
+                        name=team_name, defaults={"sport_type": tournament.sport_type}
+                    )
+                    if team_created:
+                        created_teams += 1
+
+                    _, participation_created = TeamTournamentParticipation.objects.get_or_create(
+                        team=team,
+                        tournament=tournament,
+                        defaults={"status": "active"},
+                    )
+                    if participation_created:
+                        created_participations += 1
+
+                    TeamMembership.objects.create(team=team, user=captain, role="captain")
+                    created_memberships += 1
+                    Player.objects.get_or_create(team=team, name=captain_username)
+
+                    for member_idx in range(2, members_per_team + 1):
+                        member_username = _next_unique_username(f"{username_prefix}{idx}p{member_idx}")
+                        member = User.objects.create_user(
+                            username=member_username,
+                            password=default_password,
+                            first_name=team_name,
+                        )
+                        created_users += 1
+                        TeamMembership.objects.create(team=team, user=member, role="member")
+                        created_memberships += 1
+                        Player.objects.get_or_create(team=team, name=member_username)
+
+                log_action(
+                    request,
+                    "test_maker_create_teams",
+                    (
+                        f"Created {created_teams} team(s), {created_users} user(s), "
+                        f"{created_memberships} membership(s), {created_participations} participation(s)"
+                    ),
+                    tournament=tournament,
+                )
+                messages.success(
+                    request,
+                    (
+                        f"Test data created: {created_teams} team(s), {created_users} user(s), "
+                        f"{created_memberships} membership(s), {created_participations} participation(s)."
+                    ),
+                )
 
         elif action == "randomize_court_preferences":
+            if tournament.registration_mode == "individual":
+                messages.warning(
+                    request,
+                    "Court preference randomization is team-level and is skipped for individual-mode tournaments.",
+                )
+                return redirect("test_maker")
             teams = list(
                 Team.objects.filter(
                     participations__tournament=tournament,
                     participations__status="active",
+                    is_internal=False,
                 ).distinct().order_by("id")
             )
             courts = list(tournament.courts.filter(is_available=True).order_by("id"))
@@ -1985,9 +2230,20 @@ def test_maker_view(request):
 
         return redirect("test_maker")
 
+    roster_count = 0
+    roster_label = "Teams"
+    if tournament:
+        if tournament.registration_mode == "individual":
+            roster_count = tournament.individual_registrations.filter(status="active").count()
+            roster_label = "Participants"
+        else:
+            roster_count = tournament.team_participations.filter(team__is_internal=False).count()
+            roster_label = "Teams"
     context = {
         "tournament": tournament,
-        "total_teams": tournament.team_participations.count() if tournament else 0,
+        "registration_mode": tournament.registration_mode if tournament else "team",
+        "total_teams": roster_count,
+        "roster_label": roster_label,
         "total_courts": tournament.courts.count() if tournament else 0,
         "total_matches": tournament.matches.count() if tournament else 0,
         "pending_matches": (
@@ -2038,7 +2294,10 @@ def fixtures_view(request):
     total_pages = max(1, (total + per_page - 1) // per_page)
     page = min(page, total_pages)
     matches = matches[(page - 1) * per_page : page * per_page]
-    teams = Team.objects.filter(participations__tournament=tournament).distinct()
+    teams_qs = Team.objects.filter(participations__tournament=tournament)
+    if not _is_organizer(request.user):
+        teams_qs = teams_qs.filter(is_internal=False)
+    teams = teams_qs.distinct()
     courts = tournament.courts.all()
     groups = sorted(set(tournament.team_participations.exclude(group="").values_list("group", flat=True)))
     context = {
@@ -2055,7 +2314,7 @@ def fixtures_view(request):
         "page": page,
         "total_pages": total_pages,
         "page_range": range(1, total_pages + 1),
-        "team": _get_team(request.user),
+        "team": _get_team(request.user, tournament),
         **_tournament_context(request, tournament),
     }
     return _render_refreshable_page(
@@ -2582,13 +2841,23 @@ def teams_view(request):
     tournament = _get_tournament(request)
     teams = []
     if tournament:
-        teams = Team.objects.filter(
+        tq = Team.objects.filter(
             participations__tournament=tournament,
             participations__status="active",
-        ).prefetch_related("players").distinct().order_by("name")
+        )
+        if not _is_organizer(request.user):
+            tq = tq.filter(is_internal=False)
+        teams = tq.prefetch_related("players").distinct().order_by("name")
         for team in teams:
             participation = team.participations.filter(tournament=tournament).first()
             team.group = participation.group if participation else ""
+            if tournament.registration_mode == "individual":
+                reg = TournamentIndividualRegistration.objects.filter(
+                    shadow_team=team, tournament=tournament, status="active"
+                ).first()
+                team.listing_name = reg.display_name if reg else team.name
+            else:
+                team.listing_name = team.name
 
     return render(request, "core/teams.html", {
         "tournament": tournament, "teams": teams,
@@ -2600,6 +2869,13 @@ def teams_view(request):
 @login_required
 def team_detail(request, pk):
     team = get_object_or_404(Team.objects.prefetch_related("players"), pk=pk)
+    if team.is_internal and not _is_organizer(request.user):
+        allowed = TournamentIndividualRegistration.objects.filter(
+            shadow_team=team, user=request.user, status="active"
+        ).exists()
+        if not allowed:
+            messages.error(request, "That page is not available.")
+            return redirect("dashboard")
     selected_tournament = _get_tournament(request)
     tournament = selected_tournament
     if tournament and not TeamTournamentParticipation.objects.filter(team=team, tournament=tournament).exists():
@@ -2617,7 +2893,7 @@ def team_detail(request, pk):
     }
     stats["losses"] = stats["played"] - stats["wins"]
     is_organizer = _is_organizer(request.user)
-    is_own_team = _get_team(request.user) == team
+    is_own_team = (_get_team(request.user, tournament) == team) if tournament else (_get_team(request.user) == team)
     is_captain = _is_captain(request.user, team)
     memberships = team.memberships.select_related("user").order_by("role", "joined_at")
     max_members = tournament.players_per_team if tournament else None
@@ -3663,8 +3939,7 @@ def enter_existing_team_view(request, pk):
         messages.warning(request, f"'{team.name}' is already registered for this tournament.")
         return redirect("dashboard")
 
-    # Ensure user is not already in another team in this tournament
-    if request.user.memberships.filter(team__participations__tournament=tournament).exists():
+    if _is_user_enrolled_in_tournament(request.user, tournament):
         messages.error(request, "You are already in a team for this tournament.")
         return redirect("join_tournament", pk=pk)
 

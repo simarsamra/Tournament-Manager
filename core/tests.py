@@ -6,7 +6,21 @@ from django.utils import timezone
 from django.db import models, IntegrityError
 from datetime import timedelta
 
-from .models import Team, Tournament, Match, Court, TimeSlot, CourtAvailability, Player, OpenSlot, RescheduleRequest, TeamMembership, TeamTournamentParticipation, TeamTournamentCourtPreference
+from .models import (
+    Team,
+    Tournament,
+    Match,
+    Court,
+    TimeSlot,
+    CourtAvailability,
+    Player,
+    OpenSlot,
+    RescheduleRequest,
+    TeamMembership,
+    TeamTournamentParticipation,
+    TeamTournamentCourtPreference,
+    TournamentIndividualRegistration,
+)
 from .scheduling import generate_fixtures
 from .standings import calculate_standings, advance_winner
 from .withdrawals import handle_withdrawal
@@ -735,10 +749,15 @@ class UXAndLogicRegressionTests(TestCase):
 		)
 
 		self.assertEqual(response.status_code, 200)
-		team = Team.objects.filter(name="Solo Player").first()
-		self.assertIsNotNone(team)
-		self.assertTrue(TeamTournamentParticipation.objects.filter(team=team, tournament=tournament).exists())
-		self.assertTrue(TeamMembership.objects.filter(team=team, user=user, role="captain").exists())
+		reg = TournamentIndividualRegistration.objects.filter(user=user, tournament=tournament).first()
+		self.assertIsNotNone(reg)
+		self.assertEqual(reg.display_name, "Solo Player")
+		self.assertIsNotNone(reg.shadow_team)
+		self.assertTrue(reg.shadow_team.is_internal)
+		self.assertFalse(TeamMembership.objects.filter(user=user).exists())
+		self.assertTrue(
+			TeamTournamentParticipation.objects.filter(team=reg.shadow_team, tournament=tournament).exists()
+		)
 
 	def test_organizer_generates_schedule_draft_then_publishes_tournament(self):
 		tournament = self._create_tournament(name="Draft Flow")
@@ -920,6 +939,9 @@ class UXAndLogicRegressionTests(TestCase):
 
 	def test_confirming_match_ahead_of_schedule_creates_open_slot(self):
 		tournament = self._create_tournament(name="Early Finish Opens Slot")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		court = Court.objects.create(tournament=tournament, name="Court 1", is_available=True)
 		team1 = self._create_team(tournament, "Alpha", username="alpha_open_slot")
 		team2 = self._create_team(tournament, "Beta", username="beta_open_slot")
@@ -981,6 +1003,9 @@ class UXAndLogicRegressionTests(TestCase):
 
 	def test_request_reschedule_can_use_open_slot_choice(self):
 		tournament = self._create_tournament(name="Open Slot Choice")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
 		alt_court = Court.objects.create(tournament=tournament, name="Alt", is_available=True)
 		team1 = self._create_team(tournament, "Res A", username="res_a_user")
@@ -1017,6 +1042,9 @@ class UXAndLogicRegressionTests(TestCase):
 
 	def test_match_detail_reschedule_shows_open_slot_date_in_list(self):
 		tournament = self._create_tournament(name="Readable Slot Picker")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
 		alt_court = Court.objects.create(tournament=tournament, name="Alt", is_available=True)
 		team1 = self._create_team(tournament, "Slot A", username="slot_a_user")
@@ -1086,6 +1114,9 @@ class UXAndLogicRegressionTests(TestCase):
 
 	def test_match_detail_partial_refresh_returns_section_only(self):
 		tournament = self._create_tournament(name="Live Match Detail")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		court = Court.objects.create(tournament=tournament, name="Court Live", is_available=True)
 		team1 = self._create_team(tournament, "Live A", username="live_a_user")
 		team2 = self._create_team(tournament, "Live B", username="live_b_user")
@@ -1114,6 +1145,9 @@ class UXAndLogicRegressionTests(TestCase):
 
 	def test_match_detail_reschedule_shows_same_day_context_for_both_teams(self):
 		tournament = self._create_tournament(name="Same Day Slot Context")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		primary_court = Court.objects.create(tournament=tournament, name="Primary", is_available=True)
 		court_x = Court.objects.create(tournament=tournament, name="Court X", is_available=True)
 		court_z = Court.objects.create(tournament=tournament, name="Court Z", is_available=True)
@@ -1172,6 +1206,9 @@ class UXAndLogicRegressionTests(TestCase):
 
 	def test_request_reschedule_accepts_open_slot_backed_by_completed_match(self):
 		tournament = self._create_tournament(name="Completed Match Slot")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		current_court = Court.objects.create(tournament=tournament, name="Current", is_available=True)
 		open_court = Court.objects.create(tournament=tournament, name="Open Court", is_available=True)
 		team1 = self._create_team(tournament, "Team 9", username="team9_user")
@@ -1221,6 +1258,9 @@ class UXAndLogicRegressionTests(TestCase):
 
 	def test_request_reschedule_allows_same_day_if_times_do_not_overlap(self):
 		tournament = self._create_tournament(name="Same Day Reschedule")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		court1 = Court.objects.create(tournament=tournament, name="Court 1", is_available=True)
 		court2 = Court.objects.create(tournament=tournament, name="Court 2", is_available=True)
 		team9 = self._create_team(tournament, "Team 9", username="same_day_team9")
@@ -1999,6 +2039,9 @@ class WithdrawalPolicyTests(TestCase):
 
 	def test_reschedule_request_by_reported_team_clears_pending_no_show(self):
 		tournament = self._create_tournament(fmt="round_robin", policy="forfeit")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		court = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
 		team_a = self._create_team(tournament, "Team A", username="team_a_reschedule", seed=1)
 		team_b = self._create_team(tournament, "Team B", username="team_b_reschedule", seed=2)

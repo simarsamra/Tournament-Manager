@@ -183,6 +183,11 @@ class Team(models.Model):
         default="other",
         blank=True,
     )
+    is_internal = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Hidden shadow competitor for individual-mode tournaments; exclude from normal team UX.",
+    )
 
     def __str__(self):
         return self.name
@@ -210,6 +215,53 @@ class TeamTournamentParticipation(models.Model):
 
     def __str__(self):
         return f"{self.team.name} @ {self.tournament.name}"
+
+
+class TournamentIndividualRegistration(models.Model):
+    """Source of truth for individual-mode enrollment; shadow_team bridges to the team-based match engine."""
+
+    STATUS_CHOICES = TeamTournamentParticipation.STATUS_CHOICES
+
+    tournament = models.ForeignKey(
+        Tournament, on_delete=models.CASCADE, related_name="individual_registrations"
+    )
+    user = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name="individual_registrations"
+    )
+    display_name = models.CharField(max_length=100)
+    shadow_team = models.ForeignKey(
+        "Team",
+        on_delete=models.CASCADE,
+        related_name="individual_registration_shadows",
+        null=True,
+        blank=True,
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="active")
+    withdrawn_at = models.DateTimeField(null=True, blank=True)
+    group = models.CharField(max_length=5, blank=True, default="")
+    seed = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["tournament_id", "seed", "display_name", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tournament", "user"],
+                name="uniq_tournamentindividualregistration_tournament_user",
+            ),
+            models.UniqueConstraint(
+                fields=["tournament", "display_name"],
+                name="uniq_tournamentindividualregistration_tournament_display_name",
+            ),
+            models.UniqueConstraint(
+                fields=["tournament", "shadow_team"],
+                name="uniq_tournamentindividualregistration_tournament_shadow_team",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.display_name} @ {self.tournament.name}"
 
 
 class TeamTournamentCourtPreference(models.Model):
