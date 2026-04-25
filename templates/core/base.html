@@ -100,7 +100,7 @@
                 </a>
                 {% endif %}
                 {% if team %}
-                <a href="{% url 'team_detail' pk=team.pk %}" class="btn btn-outline btn-sm">&#9881;&#65039; {{ team.name }}</a>
+                <a href="{% url 'team_detail' pk=team.pk %}" class="btn btn-outline btn-sm">&#9881;&#65039; {% if ribbon_team_pk and team.pk == ribbon_team_pk and ribbon_team_label %}{{ ribbon_team_label }}{% else %}{{ team.name }}{% endif %}</a>
                 {% elif user.is_staff %}
                 <span class="text-muted">Organizer: <strong>{{ user.username }}</strong></span>
                 {% endif %}

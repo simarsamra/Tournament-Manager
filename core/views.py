@@ -144,7 +144,14 @@ def _tournament_context(request, tournament=None):
     # Check for dual-role users
     has_dual_roles = _has_dual_roles(request.user)
     view_mode = request.session.get("view_mode", "team") if has_dual_roles else None
-    
+
+    nav_team = _get_team(request.user, tournament) if tournament else None
+    ribbon_team_label = None
+    if tournament and nav_team:
+        ribbon_team_label = _team_display_label(tournament, nav_team)
+    elif nav_team:
+        ribbon_team_label = nav_team.name
+
     ctx = {
         "has_dual_roles": has_dual_roles,
         "view_mode": view_mode,
@@ -153,6 +160,8 @@ def _tournament_context(request, tournament=None):
             .distinct()
             .order_by("name")
         ),
+        "ribbon_team_pk": nav_team.pk if nav_team else None,
+        "ribbon_team_label": ribbon_team_label,
     }
     
     if _is_organizer(request.user):
@@ -2898,8 +2907,11 @@ def team_detail(request, pk):
     memberships = team.memberships.select_related("user").order_by("role", "joined_at")
     max_members = tournament.players_per_team if tournament else None
     members_full = max_members is not None and memberships.count() >= max_members
+    team_heading_label = _team_display_label(tournament, team) if tournament else team.name
     return render(request, "core/team_detail.html", {
-        "team": team, "tournament": tournament, "matches": matches, "stats": stats,
+        "team": team,
+        "team_heading_label": team_heading_label,
+        "tournament": tournament, "matches": matches, "stats": stats,
         "players": team.players.all(),
         "is_organizer": is_organizer,
         "is_own_team": is_own_team,
@@ -3260,8 +3272,10 @@ def team_preferences(request, pk):
             tournament=tournament,
             initial={"preferred_courts": current_courts, "availability_notes": availability_notes},
         )
+    team_heading_label = _team_display_label(tournament, team) if tournament else team.name
     return render(request, "core/team_preferences.html", {
         "team": team,
+        "team_heading_label": team_heading_label,
         "form": form,
         "tournament": tournament,
         **_tournament_context(request, tournament),

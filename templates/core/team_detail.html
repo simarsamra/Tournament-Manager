@@ -1,9 +1,9 @@
 {% extends "core/base.html" %}
-{% block title %}{{ team.name }}{% endblock %}
+{% block title %}{{ team_heading_label }}{% endblock %}
 {% block page_header %}Team Detail{% endblock %}
 {% block content %}
 <div class="d-flex justify-between align-center mb-2">
-    <h1 class="page-title" style="margin-bottom:0">{{ team.name }}</h1>
+    <h1 class="page-title" style="margin-bottom:0">{{ team_heading_label }}</h1>
     <div class="d-flex gap-1">
         {% if is_captain or is_organizer %}
         <a href="{% url 'team_preferences' pk=team.pk %}" class="btn btn-outline">Preferences</a>
