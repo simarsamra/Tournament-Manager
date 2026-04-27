@@ -6,7 +6,34 @@
 
 {% if tournament %}
 <div class="card mb-2">
-    <div class="card-header">{% if tournament.registration_mode == "individual" %}Participants{% else %}Teams{% endif %} in selected tournament ({{ teams|length }})</div>
+    {% if registration_mode == "individual" %}
+    <div class="card-header">Participants in selected tournament ({{ participant_list|length }})</div>
+    <div class="table-container">
+    <table>
+        <thead>
+            <tr>
+                <th>Participant</th>
+                <th>Username</th>
+                <th>Status</th>
+                {% if tournament.format == "hybrid" %}<th>Group</th>{% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for reg in participant_list %}
+            <tr>
+                <td><strong>{{ reg.display_name }}</strong></td>
+                <td class="text-muted">{{ reg.user.username }}</td>
+                <td>{{ reg.get_status_display }}</td>
+                {% if tournament.format == "hybrid" %}<td>{{ reg.group|default:"-" }}</td>{% endif %}
+            </tr>
+            {% empty %}
+            <tr><td colspan="{% if tournament.format == 'hybrid' %}4{% else %}3{% endif %}" class="text-center text-muted">No active participants in the selected tournament.</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div class="card-header">Teams in selected tournament ({{ teams|length }})</div>
     <div class="table-container">
     <table>
         <thead>
@@ -22,7 +49,7 @@
         <tbody>
             {% for t in teams %}
             <tr>
-                <td><strong>{{ t.listing_name }}</strong></td>
+                <td><strong>{{ t.name }}</strong></td>
                 <td>{{ t.get_sport_type_display }}</td>
                 <td class="text-muted">{{ t.department|default:"-" }}</td>
                 <td style="font-size:0.85rem;color:#666;">
@@ -32,11 +59,12 @@
                 <td><a href="{% url 'team_detail' pk=t.pk %}" class="btn btn-outline btn-sm">View</a></td>
             </tr>
             {% empty %}
-            <tr><td colspan="{% if tournament.format == 'hybrid' %}6{% else %}5{% endif %}" class="text-center text-muted">No active {% if tournament.registration_mode == "individual" %}participants{% else %}teams{% endif %} in the selected tournament.</td></tr>
+            <tr><td colspan="{% if tournament.format == 'hybrid' %}6{% else %}5{% endif %}" class="text-center text-muted">No active teams in the selected tournament.</td></tr>
             {% endfor %}
         </tbody>
     </table>
     </div>
+    {% endif %}
 </div>
 {% else %}
 <p class="text-muted mb-2">No tournament selected. Choose a tournament to view participating teams.</p>

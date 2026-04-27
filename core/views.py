@@ -638,32 +638,59 @@ def _expire_pending_score_disputes(tournament=None):
 def _validate_tournament_ready(tournament):
     """Return a list of human-friendly reasons a tournament cannot start yet."""
     errors = []
-    active_teams = list(
-        Team.objects.filter(
-            participations__tournament=tournament,
-            participations__status="active",
-        ).prefetch_related("memberships").distinct()
-    )
+    if tournament.registration_mode == "individual":
+        active_regs = list(
+            tournament.individual_registrations.filter(status="active")
+            .select_related("shadow_team")
+            .order_by("id")
+        )
+        for reg in active_regs:
+            if not reg.shadow_team_id or not reg.shadow_team.is_internal:
+                _ensure_shadow_team_for_registration(reg, tournament.sport_type)
+        active_teams = list(
+            Team.objects.filter(
+                participations__tournament=tournament,
+                participations__status="active",
+                is_internal=True,
+            ).distinct()
+        )
+    else:
+        active_teams = list(
+            Team.objects.filter(
+                participations__tournament=tournament,
+                participations__status="active",
+                is_internal=False,
+            ).prefetch_related("memberships").distinct()
+        )
     active_count = len(active_teams)
 
     if active_count < 2:
-        errors.append("Need at least 2 active teams.")
+        if tournament.registration_mode == "individual":
+            errors.append("Need at least 2 active participants.")
+        else:
+            errors.append("Need at least 2 active teams.")
 
     if tournament.expected_teams_count and active_count != tournament.expected_teams_count:
-        errors.append(
-            f"Registered teams ({active_count}) must match the expected team count ({tournament.expected_teams_count})."
-        )
+        if tournament.registration_mode == "individual":
+            errors.append(
+                f"Registered participants ({active_count}) must match the expected participant count ({tournament.expected_teams_count})."
+            )
+        else:
+            errors.append(
+                f"Registered teams ({active_count}) must match the expected team count ({tournament.expected_teams_count})."
+            )
 
-    required_players = max(1, tournament.players_per_team or 1)
-    insufficient_players = [team.name for team in active_teams if team.memberships.count() < required_players]
-    if insufficient_players:
-        errors.append(
-            "These teams do not have enough members: " + ", ".join(insufficient_players[:5]) + "."
-        )
+    if tournament.registration_mode != "individual":
+        required_players = max(1, tournament.players_per_team or 1)
+        insufficient_players = [team.name for team in active_teams if team.memberships.count() < required_players]
+        if insufficient_players:
+            errors.append(
+                "These teams do not have enough members: " + ", ".join(insufficient_players[:5]) + "."
+            )
 
     if not tournament.courts.filter(is_available=True).exists():
         errors.append("Add at least one available court before starting.")
-    else:
+    elif tournament.registration_mode != "individual":
         from .models import TeamTournamentCourtPreference
         missing_preferences = [
             team.name for team in active_teams
@@ -2849,27 +2876,29 @@ def standings_view(request):
 def teams_view(request):
     tournament = _get_tournament(request)
     teams = []
+    participant_list = []
+    registration_mode = tournament.registration_mode if tournament else "team"
     if tournament:
-        tq = Team.objects.filter(
-            participations__tournament=tournament,
-            participations__status="active",
-        )
-        if not _is_organizer(request.user):
-            tq = tq.filter(is_internal=False)
-        teams = tq.prefetch_related("players").distinct().order_by("name")
-        for team in teams:
-            participation = team.participations.filter(tournament=tournament).first()
-            team.group = participation.group if participation else ""
-            if tournament.registration_mode == "individual":
-                reg = TournamentIndividualRegistration.objects.filter(
-                    shadow_team=team, tournament=tournament, status="active"
-                ).first()
-                team.listing_name = reg.display_name if reg else team.name
-            else:
-                team.listing_name = team.name
+        if tournament.registration_mode == "individual":
+            participant_list = list(
+                tournament.individual_registrations.filter(status="active")
+                .select_related("user", "shadow_team")
+                .order_by("display_name", "id")
+            )
+        else:
+            teams = Team.objects.filter(
+                participations__tournament=tournament,
+                participations__status="active",
+                is_internal=False,
+            ).prefetch_related("players").distinct().order_by("name")
+            for team in teams:
+                participation = team.participations.filter(tournament=tournament).first()
+                team.group = participation.group if participation else ""
 
     return render(request, "core/teams.html", {
         "tournament": tournament, "teams": teams,
+        "participant_list": participant_list,
+        "registration_mode": registration_mode,
         "is_organizer": _is_organizer(request.user),
         **_tournament_context(request, tournament),
     })
