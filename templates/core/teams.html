@@ -67,6 +67,16 @@
     {% endif %}
 </div>
 {% else %}
-<p class="text-muted mb-2">No tournament selected. Choose a tournament to view participating teams.</p>
+<div class="card mb-2">
+    <div class="card-body" style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+        <div>
+            <p class="text-muted" style="margin:0;">No tournament selected. You can still create and manage standalone teams.</p>
+        </div>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <a href="{% url 'create_standalone_team' %}" class="btn btn-primary">+ Create Standalone Team</a>
+            <a href="{% url 'join_tournament_list' %}" class="btn btn-outline">Open Registrations</a>
+        </div>
+    </div>
+</div>
 {% endif %}
 {% endblock %}

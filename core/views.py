@@ -721,10 +721,15 @@ def _validate_tournament_ready(tournament):
 
     if tournament.registration_mode != "individual":
         required_players = max(1, tournament.players_per_team or 1)
-        insufficient_players = [team.name for team in active_teams if team.memberships.count() < required_players]
-        if insufficient_players:
+        roster_mismatch = []
+        for team in active_teams:
+            count = team.memberships.count()
+            if count != required_players:
+                roster_mismatch.append(f"{team.name} ({count})")
+        if roster_mismatch:
             errors.append(
-                "These teams do not have enough members: " + ", ".join(insufficient_players[:5]) + "."
+                f"Each team must have exactly {required_players} members before starting. "
+                "Mismatched teams: " + ", ".join(roster_mismatch[:5]) + "."
             )
 
     if not tournament.courts.filter(is_available=True).exists():
@@ -3289,11 +3294,32 @@ def withdraw_team(request, pk):
         messages.error(request, "Only the team captain can withdraw the team.")
         return redirect("team_detail", pk=pk)
     tournament = _get_tournament(request)
-    participation = TeamTournamentParticipation.objects.filter(
-        team=team, tournament=tournament
-    ).first() if tournament else None
+    if tournament and not TeamTournamentParticipation.objects.filter(team=team, tournament=tournament).exists():
+        tournament = None
+
+    if not tournament:
+        active_participations = list(
+            TeamTournamentParticipation.objects.filter(team=team, status="active")
+            .select_related("tournament")
+            .order_by("-created_at")
+        )
+        if len(active_participations) == 1:
+            tournament = active_participations[0].tournament
+        elif len(active_participations) > 1:
+            messages.error(request, "Select the tournament first, then withdraw the team from that tournament.")
+            return redirect("team_detail", pk=pk)
+
+    if not tournament:
+        messages.error(request, "This team is not actively enrolled in any tournament.")
+        return redirect("team_detail", pk=pk)
+
+    participation = TeamTournamentParticipation.objects.filter(team=team, tournament=tournament).first()
     if participation and participation.status == "withdrawn":
         messages.info(request, f"Team '{team.name}' is already withdrawn.")
+        return redirect("team_detail", pk=pk)
+
+    if tournament.status == "completed":
+        messages.error(request, "Completed tournaments do not allow team withdrawals.")
         return redirect("team_detail", pk=pk)
 
     # Team self-withdrawal requires explicit confirmation + password check.
@@ -4139,6 +4165,16 @@ def enter_existing_team_view(request, pk):
 
     if _is_user_enrolled_in_tournament(request.user, tournament):
         messages.error(request, "You are already in a team for this tournament.")
+        return redirect("join_tournament", pk=pk)
+
+    required_players = max(1, tournament.players_per_team or 1)
+    member_count = team.memberships.count()
+    if member_count != required_players:
+        messages.error(
+            request,
+            f"'{team.name}' must have exactly {required_players} members to enter this tournament "
+            f"(currently {member_count}).",
+        )
         return redirect("join_tournament", pk=pk)
 
     TeamTournamentParticipation.objects.create(team=team, tournament=tournament, status="active")

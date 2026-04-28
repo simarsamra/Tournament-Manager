@@ -732,6 +732,42 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertTrue(Team.objects.filter(name="Street Smashers", sport_type="table_tennis").exists())
 		self.assertTrue(Team.objects.filter(name="Sunday Strikers", sport_type="tennis").exists())
 
+	def test_teams_page_without_selected_tournament_shows_create_team_action(self):
+		user = User.objects.create_user(username="no_tournament_user", password="abc12345")
+		self.client.force_login(user)
+
+		response = self.client.get(reverse("teams"))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertContains(response, "Create Standalone Team")
+
+	def test_enter_existing_team_rejects_team_with_extra_members(self):
+		open_tournament = self._create_tournament(name="Open 2P")
+		open_tournament.status = "registration_open"
+		open_tournament.players_per_team = 2
+		open_tournament.save(update_fields=["status", "players_per_team"])
+
+		captain = User.objects.create_user(username="cap_over", password="pass123")
+		member1 = User.objects.create_user(username="mem_over_1", password="pass123")
+		member2 = User.objects.create_user(username="mem_over_2", password="pass123")
+		team = Team.objects.create(name="Oversized Team", sport_type=open_tournament.sport_type)
+		TeamMembership.objects.create(team=team, user=captain, role="captain")
+		TeamMembership.objects.create(team=team, user=member1, role="member")
+		TeamMembership.objects.create(team=team, user=member2, role="member")
+
+		self.client.force_login(captain)
+		response = self.client.post(
+			reverse("enter_existing_team", kwargs={"pk": open_tournament.pk}),
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertFalse(
+			TeamTournamentParticipation.objects.filter(team=team, tournament=open_tournament).exists()
+		)
+		msgs = [str(m) for m in response.context["messages"]]
+		self.assertTrue(any("must have exactly" in m.lower() for m in msgs))
+
 	def test_individual_registration_mode_registers_player_name(self):
 		tournament = self._create_tournament(name="Singles Cup")
 		tournament.status = "registration_open"
@@ -1718,6 +1754,9 @@ class WithdrawalPolicyTests(TestCase):
 	def test_withdrawal_forfeit_policy_marks_future_matches(self):
 		"""Verify forfeit policy marks future matches as forfeited with opponent as winner."""
 		tournament = self._create_tournament(policy="forfeit")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		team1 = self._create_team(tournament, "Team A", seed=1)
 		team2 = self._create_team(tournament, "Team B", seed=2)
 		team3 = self._create_team(tournament, "Team C", seed=3)
@@ -1752,6 +1791,9 @@ class WithdrawalPolicyTests(TestCase):
 	def test_withdrawal_void_policy_marks_future_matches_cancelled(self):
 		"""Verify void policy marks future matches as cancelled."""
 		tournament = self._create_tournament(policy="void")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		team1 = self._create_team(tournament, "Team A", seed=1)
 		team2 = self._create_team(tournament, "Team B", seed=2)
 		team3 = self._create_team(tournament, "Team C", seed=3)
@@ -1781,6 +1823,9 @@ class WithdrawalPolicyTests(TestCase):
 	def test_withdrawal_forfeit_standings_impact(self):
 		"""Verify forfeit policy impacts standings (opponent gets win)."""
 		tournament = self._create_tournament(policy="forfeit")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		team1 = self._create_team(tournament, "Team A", seed=1)
 		team2 = self._create_team(tournament, "Team B", seed=2)
 		team3 = self._create_team(tournament, "Team C", seed=3)
@@ -1821,6 +1866,9 @@ class WithdrawalPolicyTests(TestCase):
 	def test_withdrawal_void_standings_not_impacted(self):
 		"""Verify void policy doesn't impact standings (match voided)."""
 		tournament = self._create_tournament(policy="void")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		team1 = self._create_team(tournament, "Team A", seed=1)
 		team2 = self._create_team(tournament, "Team B", seed=2)
 		team3 = self._create_team(tournament, "Team C", seed=3)
@@ -1858,6 +1906,9 @@ class WithdrawalPolicyTests(TestCase):
 	def test_withdrawal_creates_open_slots(self):
 		"""Verify scheduled matches create open slots when team withdraws."""
 		tournament = self._create_tournament(policy="forfeit")
+		tournament.status = "active"
+		tournament.started_at = timezone.now()
+		tournament.save(update_fields=["status", "started_at"])
 		team1 = self._create_team(tournament, "Team A", seed=1)
 		team2 = self._create_team(tournament, "Team B", seed=2)
 
@@ -1890,6 +1941,31 @@ class WithdrawalPolicyTests(TestCase):
 		# Verify open slots were created for scheduled matches
 		open_slots_after = tournament.open_slots.count()
 		self.assertGreater(open_slots_after, open_slots_before)
+
+	def test_pre_activation_withdrawal_cancels_draft_matches_without_forfeit(self):
+		tournament = self._create_tournament(policy="forfeit")
+		tournament.status = "scheduled"
+		tournament.save(update_fields=["status"])
+		team1 = self._create_team(tournament, "Team A", seed=1)
+		self._create_team(tournament, "Team B", seed=2)
+		generate_fixtures(tournament)
+
+		request = self._create_mock_request()
+		handle_withdrawal(request, team1, tournament)
+
+		self.assertEqual(_participation(team1, tournament).status, "withdrawn")
+		self.assertFalse(
+			tournament.matches.filter(
+				(models.Q(team1=team1) | models.Q(team2=team1)),
+				status="forfeited",
+			).exists()
+		)
+		self.assertTrue(
+			tournament.matches.filter(
+				(models.Q(team1=team1) | models.Q(team2=team1)),
+				status="cancelled",
+			).exists()
+		)
 
 	def test_team_self_withdraw_requires_correct_password(self):
 		tournament = self._create_tournament(policy="forfeit")
