@@ -168,10 +168,10 @@ class UXAndLogicRegressionTests(TestCase):
 		team = self._create_team(tournament, "Role Team")
 		manager_user = User.objects.create_user(username="role_manager", password="pass123")
 
-		membership = TeamMembership.objects.create(team=team, user=manager_user, role="manager")
+		membership = TeamMembership.objects.create(team=team, user=manager_user, role="member")
 
-		self.assertEqual(membership.role, "manager")
-		self.assertIn("manager", dict(TeamMembership.ROLE_CHOICES))
+		self.assertEqual(membership.role, "member")
+		self.assertIn("member", dict(TeamMembership.ROLE_CHOICES))
 
 	def test_team_can_have_multiple_tournament_participations(self):
 		first = self._create_tournament(name="Participation A")
@@ -383,7 +383,7 @@ class UXAndLogicRegressionTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		user.refresh_from_db()
-		self.assertTrue(user.is_staff)
+		self.assertTrue(user.organizer_profile.verified)
 
 	def test_non_organizer_cannot_promote_user_to_organizer(self):
 		tournament = self._create_tournament(name="Role Guard")
@@ -398,7 +398,7 @@ class UXAndLogicRegressionTests(TestCase):
 
 		self.assertEqual(response.status_code, 302)
 		target.refresh_from_db()
-		self.assertFalse(target.is_staff)
+		self.assertFalse(target.organizer_profile.verified)
 
 	def test_organizer_can_demote_another_organizer_if_one_remains(self):
 		other_organizer = User.objects.create_user(
@@ -414,7 +414,7 @@ class UXAndLogicRegressionTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		other_organizer.refresh_from_db()
-		self.assertFalse(other_organizer.is_staff)
+		self.assertFalse(other_organizer.organizer_profile.verified)
 
 	def test_cannot_demote_last_organizer(self):
 		self.client.force_login(self.organizer)
@@ -427,7 +427,7 @@ class UXAndLogicRegressionTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		self.organizer.refresh_from_db()
-		self.assertTrue(self.organizer.is_staff)
+		self.assertTrue(self.organizer.organizer_profile.verified)
 		msgs = [str(m) for m in response.context["messages"]]
 		self.assertTrue(any("at least one organizer" in m.lower() for m in msgs))
 
@@ -445,7 +445,7 @@ class UXAndLogicRegressionTests(TestCase):
 
 		self.assertEqual(response.status_code, 200)
 		target.refresh_from_db()
-		self.assertTrue(target.is_staff)
+		self.assertTrue(target.organizer_profile.verified)
 		msgs = [str(m) for m in response.context["messages"]]
 		self.assertTrue(any("invalid organizer role update request" in m.lower() for m in msgs))
 
@@ -1036,7 +1036,7 @@ class UXAndLogicRegressionTests(TestCase):
 		)
 
 		self.assertEqual(response.status_code, 200)
-		rr = RescheduleRequest.objects.get(match=match, requested_by=team1)
+		rr = RescheduleRequest.objects.get(match=match, requested_by=_captain_user(team1))
 		self.assertEqual(rr.new_time, slot.start_time)
 		self.assertEqual(rr.new_court, alt_court)
 
@@ -1253,7 +1253,7 @@ class UXAndLogicRegressionTests(TestCase):
 		)
 
 		self.assertEqual(response.status_code, 200)
-		self.assertTrue(RescheduleRequest.objects.filter(match=match, requested_by=team1).exists())
+		self.assertTrue(RescheduleRequest.objects.filter(match=match, requested_by=_captain_user(team1)).exists())
 		self.assertFalse(any("conflict" in str(m).lower() for m in response.context["messages"]))
 
 	def test_request_reschedule_allows_same_day_if_times_do_not_overlap(self):
@@ -1304,7 +1304,7 @@ class UXAndLogicRegressionTests(TestCase):
 		)
 
 		self.assertEqual(response.status_code, 200)
-		self.assertTrue(RescheduleRequest.objects.filter(match=match, requested_by=team10).exists())
+		self.assertTrue(RescheduleRequest.objects.filter(match=match, requested_by=_captain_user(team10)).exists())
 		self.assertFalse(any("already has another match scheduled on that day" in str(m).lower() for m in response.context["messages"]))
 
 	def test_knockout_disallows_draw_on_confirm(self):
@@ -1316,7 +1316,7 @@ class UXAndLogicRegressionTests(TestCase):
 		match.status = "pending_confirmation"
 		match.score_team1 = 2
 		match.score_team2 = 2
-		match.submitted_by = team1
+		match.submitted_by = _captain_user(team1)
 		match.score_submitted_at = timezone.now()
 		match.dispute_deadline_at = timezone.now() + timedelta(hours=24)
 		match.save(update_fields=[
@@ -1526,7 +1526,7 @@ class DoubleEliminationBracketTests(TestCase):
 			match.score_team1 = 2
 			match.score_team2 = 1
 			match.winner = match.team1
-			match.submitted_by = match.team1
+			match.submitted_by = _captain_user(match.team1)
 			match.save(update_fields=["status", "score_team1", "score_team2", "winner", "submitted_by"])
 
 			# Advance winner to next round
@@ -1655,7 +1655,7 @@ class DoubleEliminationBracketTests(TestCase):
 		match.status = "pending_confirmation"
 		match.score_team1 = 2
 		match.score_team2 = 2
-		match.submitted_by = team1
+		match.submitted_by = _captain_user(team1)
 		match.score_submitted_at = timezone.now()
 		match.dispute_deadline_at = timezone.now() + timedelta(hours=24)
 		match.save(update_fields=[
@@ -2942,7 +2942,7 @@ class ScoreDisputeWindowTests(TestCase):
 
 		match.refresh_from_db()
 		self.assertEqual(match.status, "pending_confirmation")
-		self.assertEqual(match.submitted_by, team1)
+		self.assertEqual(match.submitted_by, _captain_user(team1))
 		self.assertIsNotNone(match.dispute_deadline_at)
 		self.assertIsNotNone(match.score_submitted_at)
 
@@ -2954,7 +2954,7 @@ class ScoreDisputeWindowTests(TestCase):
 		match.status = "pending_confirmation"
 		match.score_team1 = 3
 		match.score_team2 = 2
-		match.submitted_by = team1
+		match.submitted_by = _captain_user(team1)
 		match.score_submitted_at = timezone.now() - timedelta(hours=1)
 		match.dispute_deadline_at = timezone.now() + timedelta(hours=2)
 		match.save()
@@ -2979,7 +2979,7 @@ class ScoreDisputeWindowTests(TestCase):
 		match.status = "pending_confirmation"
 		match.score_team1 = 1
 		match.score_team2 = 0
-		match.submitted_by = team1
+		match.submitted_by = _captain_user(team1)
 		match.score_submitted_at = timezone.now() - timedelta(hours=1)
 		match.dispute_deadline_at = timezone.now() + timedelta(hours=3)
 		match.save()
@@ -2988,7 +2988,7 @@ class ScoreDisputeWindowTests(TestCase):
 		self.client.post(reverse("confirm_score", kwargs={"pk": match.pk}), follow=True)
 		match.refresh_from_db()
 		self.assertEqual(match.status, "confirmed")
-		self.assertEqual(match.confirmed_by, team2)
+		self.assertEqual(match.confirmed_by, _captain_user(team2))
 		self.assertIsNotNone(match.score_locked_at)
 
 	def test_critical_dispute_requires_resolution_notes(self):
@@ -3005,7 +3005,7 @@ class ScoreDisputeWindowTests(TestCase):
 		match.status = "pending_confirmation"
 		match.score_team1 = 2
 		match.score_team2 = 1
-		match.submitted_by = team1
+		match.submitted_by = _captain_user(team1)
 		match.score_submitted_at = timezone.now()
 		match.dispute_deadline_at = timezone.now() + timedelta(hours=1)
 		match.save()

@@ -293,10 +293,33 @@ class Player(models.Model):
         return f"{self.name} ({self.team.name})"
 
 
+class OrganizerProfile(models.Model):
+    """Marks users who are approved to create and manage tournaments."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="organizer_profile")
+    org_name = models.CharField(max_length=200, blank=True, default="")
+    verified = models.BooleanField(default=False, help_text="Admin-approved organizer")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.username} (Organizer)"
+
+
+class UserTeamAssignment(models.Model):
+    """Tracks each user's active team. One per user."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="team_assignment")
+    active_team = models.ForeignKey(Team, null=True, blank=True, on_delete=models.SET_NULL, related_name="active_members")
+
+    class Meta:
+        verbose_name = "User Team Assignment"
+        verbose_name_plural = "User Team Assignments"
+
+    def __str__(self):
+        return f"{self.user.username} -> {self.active_team.name if self.active_team else 'No Team'}"
+
+
 class TeamMembership(models.Model):
     ROLE_CHOICES = [
         ("captain", "Captain"),
-        ("manager", "Manager"),
         ("member", "Member"),
     ]
 
@@ -349,13 +372,13 @@ class Match(models.Model):
     dispute_deadline_at = models.DateTimeField(null=True, blank=True, db_index=True)
     score_locked_at = models.DateTimeField(null=True, blank=True)
     submitted_by = models.ForeignKey(
-        Team, on_delete=models.SET_NULL, null=True, blank=True, related_name="submitted_scores"
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="submitted_matches"
     )
     confirmed_by = models.ForeignKey(
-        Team, on_delete=models.SET_NULL, null=True, blank=True, related_name="confirmed_scores"
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="confirmed_matches"
     )
     disputed_by = models.ForeignKey(
-        Team, on_delete=models.SET_NULL, null=True, blank=True, related_name="raised_disputes"
+        User, on_delete=models.SET_NULL, null=True, blank=True, related_name="disputed_matches"
     )
     critical_dispute = models.BooleanField(default=False)
     dispute_resolution_notes = models.TextField(blank=True, default="")
@@ -405,7 +428,7 @@ class RescheduleRequest(models.Model):
         Match, on_delete=models.CASCADE, related_name="reschedule_requests"
     )
     requested_by = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="reschedule_requests_made"
+        User, on_delete=models.CASCADE, related_name="reschedule_requests_made"
     )
     new_time = models.DateTimeField()
     new_court = models.ForeignKey(
@@ -417,7 +440,54 @@ class RescheduleRequest(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"Reschedule for {self.match} by {self.requested_by}"
+        return f"Reschedule for {self.match} by {self.requested_by.username}"
+
+
+class TeamRegistration(models.Model):
+    """Registration of a team for a specific tournament."""
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("approved", "Approved"),
+        ("withdrawn", "Withdrawn"),
+        ("disqualified", "Disqualified"),
+    ]
+    
+    tournament = models.ForeignKey(Tournament, on_delete=models.CASCADE, related_name="team_registrations")
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="registrations")
+    registered_by = models.ForeignKey(User, null=True, on_delete=models.SET_NULL, related_name="registered_teams")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [["tournament", "team"]]
+        ordering = ["tournament_id", "created_at"]
+
+    def __str__(self):
+        return f"{self.team.name} @ {self.tournament.name} ({self.status})"
+
+
+class IndividualRegistration(models.Model):
+    """Registration of an individual user for a specific tournament."""
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("approved", "Approved"),
+        ("withdrawn", "Withdrawn"),
+        ("disqualified", "Disqualified"),
+    ]
+    
+    tournament = models.ForeignKey(Tournament, on_delete=models.CASCADE, related_name="individual_registrations_new")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="individual_registrations_new")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [["tournament", "user"]]
+        ordering = ["tournament_id", "user__username"]
+
+    def __str__(self):
+        return f"{self.user.username} @ {self.tournament.name} ({self.status})"
 
 
 class NoShowReport(models.Model):
@@ -432,7 +502,7 @@ class NoShowReport(models.Model):
         Match, on_delete=models.CASCADE, related_name="no_show_reports"
     )
     reported_by = models.ForeignKey(
-        Team, on_delete=models.CASCADE, related_name="no_show_reports_made"
+        User, on_delete=models.CASCADE, related_name="no_show_reports_made"
     )
     absent_team = models.ForeignKey(
         Team, on_delete=models.CASCADE, related_name="no_show_reports_against"
@@ -450,7 +520,7 @@ class NoShowReport(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"No-show report for {self.match} against {self.absent_team.name}"
+        return f"No-show report for {self.match} by {self.reported_by.username}"
 
 
 class OpenSlot(models.Model):

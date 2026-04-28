@@ -56,10 +56,12 @@ def handle_withdrawal(request, team, tournament):
                 reason=f"Withdrawal of {team.name}",
             )
 
-    # Cancel pending reschedule requests
+    # Cancel pending reschedule requests from any team member
     from .models import RescheduleRequest
+    from django.contrib.auth.models import User
+    team_member_users = User.objects.filter(memberships__team=team)
     RescheduleRequest.objects.filter(
-        requested_by=team, status="pending"
+        requested_by__in=team_member_users, status="pending"
     ).update(status="cancelled")
 
     log_action(

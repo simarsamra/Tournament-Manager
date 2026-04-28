@@ -24,6 +24,7 @@ from .models import (
     RescheduleRequest, NoShowReport, OpenSlot, AuditLog, BackupRecord, Player, CourtAvailability,
     TeamMembership, TeamTournamentParticipation, TeamTournamentCourtPreference,
     TournamentIndividualRegistration,
+    TeamRegistration, IndividualRegistration, TournamentIndividualRegistration,
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
@@ -297,6 +298,51 @@ def _team_display_label(tournament, team):
     return team.name
 
 
+def _is_organizer(user):
+    """Check if user is an approved organizer."""
+    try:
+        return hasattr(user, 'organizer_profile') and user.organizer_profile.verified
+    except:
+        return False
+
+
+def _is_captain(user, team=None):
+    """Check if user is captain of their active team, or of a specific team if provided."""
+    if not user.is_authenticated:
+        return False
+    try:
+        if team is None:
+            # Check if captain of active team
+            if not hasattr(user, 'team_assignment') or not user.team_assignment.active_team:
+                return False
+            return TeamMembership.objects.filter(
+                user=user, 
+                team=user.team_assignment.active_team, 
+                role="captain"
+            ).exists()
+        else:
+            # Check if captain of specific team
+            return TeamMembership.objects.filter(
+                user=user, 
+                team=team, 
+                role="captain"
+            ).exists()
+    except:
+        return False
+
+
+def _get_active_team(user):
+    """Get user's active team, or None."""
+    if not user.is_authenticated:
+        return None
+    try:
+        if hasattr(user, 'team_assignment') and user.team_assignment.active_team:
+            return user.team_assignment.active_team
+    except:
+        pass
+    return None
+
+
 def _get_team(user, tournament=None):
     """Return the user's competitor Team for match flows (membership team or individual shadow team)."""
     if tournament is not None:
@@ -330,17 +376,6 @@ def _get_team(user, tournament=None):
     return reg.shadow_team if reg else None
 
 
-def _is_captain(user, team):
-    """Return True only if user has the captain role for this team."""
-    if team is None:
-        return False
-    return TeamMembership.objects.filter(team=team, user=user, role="captain").exists()
-
-
-def _is_organizer(user):
-    return user.is_staff or user.is_superuser
-
-
 def _has_dual_roles(user):
     """Check if user is both organizer and team member."""
     if not _is_organizer(user):
@@ -350,9 +385,10 @@ def _has_dual_roles(user):
 
 
 def _organizer_count(exclude_user_id=None):
-    qs = User.objects.filter(Q(is_staff=True) | Q(is_superuser=True))
+    from .models import OrganizerProfile
+    qs = OrganizerProfile.objects.filter(verified=True)
     if exclude_user_id is not None:
-        qs = qs.exclude(pk=exclude_user_id)
+        qs = qs.exclude(user_id=exclude_user_id)
     return qs.count()
 
 
@@ -532,7 +568,10 @@ def _expire_no_show_reports(tournament=None):
             report.save(update_fields=["status", "resolved_at"])
             continue
 
-        if match.reschedule_requests.filter(status="pending", requested_by=report.absent_team).exists():
+        if match.reschedule_requests.filter(
+            status="pending",
+            requested_by__memberships__team=report.absent_team
+        ).exists():
             report.status = "resolved"
             report.resolved_at = now
             report.save(update_fields=["status", "resolved_at"])
@@ -572,12 +611,12 @@ def _is_within_dispute_window(match):
     return bool(match.dispute_deadline_at and timezone.now() <= match.dispute_deadline_at)
 
 
-def _lock_match_score(match, confirmed_by_team=None, lock_note=""):
+def _lock_match_score(match, confirmed_by_user=None, lock_note=""):
     """Lock score permanently, mark confirmed, and execute completion side-effects.
 
     Args:
         match: Match whose submitted score should be finalized.
-        confirmed_by_team: Team that explicitly locked the score, or None for
+        confirmed_by_user: User that explicitly locked the score, or None for
             organizer/automatic locks.
         lock_note: Optional note appended to match notes (e.g., auto-lock reason).
     """
@@ -588,7 +627,7 @@ def _lock_match_score(match, confirmed_by_team=None, lock_note=""):
     if is_elimination and match.score_team1 == match.score_team2:
         return False
 
-    match.confirmed_by = confirmed_by_team
+    match.confirmed_by = confirmed_by_user
     match.status = "confirmed"
     match.score_locked_at = timezone.now()
     match.disputed_by = None
@@ -626,7 +665,7 @@ def _expire_pending_score_disputes(tournament=None):
     now = timezone.now()
     for match in pending_scores:
         if match.dispute_deadline_at and match.dispute_deadline_at <= now:
-            if _lock_match_score(match, confirmed_by_team=None, lock_note="Auto-locked after dispute deadline."):
+            if _lock_match_score(match, confirmed_by_user=None, lock_note="Auto-locked after dispute deadline."):
                 log_action(
                     None,
                     "score_auto_locked",
@@ -1273,7 +1312,7 @@ def dashboard_view(request):
 
         pending_matches = team_matches_qs.filter(
             status="pending_confirmation"
-        ).exclude(submitted_by=team).select_related("team1", "team2", "submitted_by")
+        ).exclude(submitted_by=request.user).select_related("team1", "team2", "submitted_by")
         context["pending_matches"] = pending_matches
         context["dispute_window_matches"] = pending_matches
 
@@ -1297,7 +1336,7 @@ def dashboard_view(request):
 
         context["pending_reschedules"] = RescheduleRequest.objects.filter(
             match__in=team_matches_qs, status="pending",
-        ).exclude(requested_by=team)
+        ).exclude(requested_by=request.user)
         context["pending_no_show_reports"] = NoShowReport.objects.filter(
             match__in=team_matches_qs,
             status="pending",
@@ -1986,6 +2025,14 @@ def test_maker_view(request):
 
         action = (request.POST.get("action") or "").strip()
 
+        def _next_unique_username(base_username):
+            if not User.objects.filter(username=base_username).exists():
+                return base_username
+            suffix = 1
+            while User.objects.filter(username=f"{base_username}_{suffix}").exists():
+                suffix += 1
+            return f"{base_username}_{suffix}"
+
         if action == "create_test_teams":
             team_count_raw = request.POST.get("team_count", "10")
             members_raw = request.POST.get("members_per_team") or str(tournament.players_per_team or 2)
@@ -1999,14 +2046,6 @@ def test_maker_view(request):
             except ValueError:
                 messages.error(request, "Team count and members per team must be valid numbers.")
                 return redirect("test_maker")
-
-            def _next_unique_username(base_username):
-                if not User.objects.filter(username=base_username).exists():
-                    return base_username
-                suffix = 1
-                while User.objects.filter(username=f"{base_username}_{suffix}").exists():
-                    suffix += 1
-                return f"{base_username}_{suffix}"
 
             if tournament.registration_mode == "individual":
                 created_regs = 0
@@ -2117,6 +2156,114 @@ def test_maker_view(request):
                         f"{created_memberships} membership(s), {created_participations} participation(s)."
                     ),
                 )
+        elif action == "register_to_open_tournament":
+            if tournament.status != "registration_open":
+                messages.error(request, "Tournament must have status 'Registration Open' to use this action.")
+                return redirect("test_maker")
+
+            reg_count_raw = request.POST.get("reg_count", "5")
+            reg_prefix = (request.POST.get("reg_prefix") or ("p" if tournament.registration_mode == "individual" else "rteam")).strip()
+            reg_username_prefix = (request.POST.get("reg_username_prefix") or "r").strip() or "r"
+            reg_password = request.POST.get("reg_password") or "pass123"
+
+            try:
+                reg_count = max(1, int(reg_count_raw))
+            except ValueError:
+                messages.error(request, "Count must be a valid number.")
+                return redirect("test_maker")
+
+            created_users = 0
+            created_regs = 0
+            created_teams = 0
+            created_participations = 0
+
+            if tournament.registration_mode == "individual":
+                for idx in range(1, reg_count + 1):
+                    display_name = f"{reg_prefix}{idx}"[:100]
+                    if tournament.individual_registrations.filter(display_name__iexact=display_name).exists():
+                        continue
+                    username = _next_unique_username(f"{reg_username_prefix}{idx}")
+                    user = User.objects.create_user(
+                        username=username,
+                        password=reg_password,
+                        first_name=display_name,
+                    )
+                    created_users += 1
+                    # Create IndividualRegistration (new registration model)
+                    IndividualRegistration.objects.get_or_create(
+                        tournament=tournament,
+                        user=user,
+                        defaults={"status": "approved"},
+                    )
+                    created_regs += 1
+                    # Also create TournamentIndividualRegistration + shadow for match engine
+                    ind_reg = TournamentIndividualRegistration.objects.create(
+                        tournament=tournament,
+                        user=user,
+                        display_name=display_name,
+                        status="active",
+                    )
+                    shadow = _ensure_shadow_team_for_registration(ind_reg, tournament.sport_type)
+                    if shadow:
+                        created_participations += 1
+            else:
+                members_per_team = max(1, int(request.POST.get("reg_members_per_team") or tournament.players_per_team or 1))
+                for idx in range(1, reg_count + 1):
+                    team_name = f"{reg_prefix}{idx}"
+                    if TeamRegistration.objects.filter(tournament=tournament, team__name=team_name).exists():
+                        continue
+                    captain_username = _next_unique_username(f"{reg_username_prefix}{idx}p1")
+                    captain = User.objects.create_user(
+                        username=captain_username,
+                        password=reg_password,
+                        first_name=team_name,
+                    )
+                    created_users += 1
+                    team, team_created = Team.objects.get_or_create(
+                        name=team_name,
+                        defaults={"sport_type": tournament.sport_type},
+                    )
+                    if team_created:
+                        created_teams += 1
+                    TeamMembership.objects.get_or_create(team=team, user=captain, defaults={"role": "captain"})
+                    # Create TeamRegistration (the new registration model)
+                    TeamRegistration.objects.create(
+                        tournament=tournament,
+                        team=team,
+                        registered_by=captain,
+                        status="approved",
+                    )
+                    created_regs += 1
+                    # Create participation so team appears in scheduling
+                    _, part_created = TeamTournamentParticipation.objects.get_or_create(
+                        team=team,
+                        tournament=tournament,
+                        defaults={"status": "active"},
+                    )
+                    if part_created:
+                        created_participations += 1
+                    for member_idx in range(2, members_per_team + 1):
+                        member_username = _next_unique_username(f"{reg_username_prefix}{idx}p{member_idx}")
+                        member = User.objects.create_user(
+                            username=member_username,
+                            password=reg_password,
+                            first_name=team_name,
+                        )
+                        created_users += 1
+                        TeamMembership.objects.create(team=team, user=member, role="member")
+
+            if tournament.registration_mode == "individual":
+                summary = (
+                    f"Registered {created_regs} individual(s), {created_users} user(s), "
+                    f"{created_participations} shadow competitor(s)."
+                )
+            else:
+                summary = (
+                    f"Registered {created_regs} team(s), {created_teams} new team(s) created, "
+                    f"{created_users} user(s), {created_participations} participation(s)."
+                )
+            log_action(request, "test_maker_register_to_open", summary, tournament=tournament)
+            messages.success(request, summary)
 
         elif action == "randomize_court_preferences":
             if tournament.registration_mode == "individual":
@@ -2198,8 +2345,8 @@ def test_maker_view(request):
                 match.score_team2 = s2
                 match.winner = match.team1 if s1 > s2 else match.team2
                 match.status = "confirmed"
-                match.submitted_by = match.team1
-                match.confirmed_by = match.team2
+                match.submitted_by = None
+                match.confirmed_by = None
                 match.save(update_fields=[
                     "score_team1", "score_team2", "winner", "status", "submitted_by", "confirmed_by"
                 ])
@@ -2385,7 +2532,7 @@ def match_detail(request, pk):
     can_confirm = (
         is_participant
         and match.status == "pending_confirmation"
-        and match.submitted_by != team
+        and match.submitted_by != request.user
         and dispute_window_open
     )
     can_dispute = can_confirm
@@ -2481,7 +2628,7 @@ def submit_score(request, pk):
             else:
                 match.winner = None
         else:
-            match.submitted_by = team
+            match.submitted_by = request.user
             match.confirmed_by = None
             submitted_at = timezone.now()
             window_hours = _dispute_window_hours_for_match(match)
@@ -2536,7 +2683,7 @@ def confirm_score(request, pk):
     _expire_pending_score_disputes(match.tournament)
     match.refresh_from_db()
     team = _get_team(request.user, match.tournament)
-    if not team or match.submitted_by == team:
+    if not team or match.submitted_by == request.user:
         messages.error(request, "Cannot confirm your own submission.")
         return redirect("match_detail", pk=pk)
     if match.status != "pending_confirmation":
@@ -2549,7 +2696,7 @@ def confirm_score(request, pk):
         messages.error(request, "You are not a participant in this match.")
         return redirect("match_detail", pk=pk)
     tournament = match.tournament
-    if not _lock_match_score(match, confirmed_by_team=team):
+    if not _lock_match_score(match, confirmed_by_user=request.user):
         messages.error(request, "Draws are not allowed in elimination matches.")
         return redirect("match_detail", pk=pk)
     log_action(request, "score_confirmed",
@@ -2566,7 +2713,7 @@ def dispute_score(request, pk):
     _expire_pending_score_disputes(match.tournament)
     match.refresh_from_db()
     team = _get_team(request.user, match.tournament)
-    if not team or match.submitted_by == team:
+    if not team or match.submitted_by == request.user:
         messages.error(request, "Cannot dispute your own submission.")
         return redirect("match_detail", pk=pk)
     if match.status != "pending_confirmation":
@@ -2577,13 +2724,13 @@ def dispute_score(request, pk):
         return redirect("match_detail", pk=pk)
     dispute_note = request.POST.get("dispute_notes", "").strip()
     match.status = "disputed"
-    match.disputed_by = team
+    match.disputed_by = request.user
     match.critical_dispute = _is_critical_stage_match(match)
     prefix = "CRITICAL-STAGE DISPUTE" if match.critical_dispute else "DISPUTED"
-    match.notes = f"{prefix} by {team.name}: {dispute_note}" if dispute_note else f"{prefix} by {team.name}"
+    match.notes = f"{prefix} by {request.user.username}: {dispute_note}" if dispute_note else f"{prefix} by {request.user.username}"
     match.save()
     log_action(request, "score_disputed",
-               f"Score disputed for {match} by {team.name}: {dispute_note}",
+               f"Score disputed for {match} by {request.user.username}: {dispute_note}",
                tournament=match.tournament)
     if match.critical_dispute:
         messages.warning(request, "Critical-stage dispute filed. Organizers will review with priority.")
@@ -2625,7 +2772,7 @@ def resolve_dispute(request, pk):
 
         match.score_team1 = final_score1
         match.score_team2 = final_score2
-        if not _lock_match_score(match, confirmed_by_team=None):
+        if not _lock_match_score(match, confirmed_by_user=None):
             messages.error(request, "Draws are not allowed in elimination matches.")
             return redirect("match_detail", pk=pk)
         match.dispute_resolution_notes = resolution_notes
@@ -2760,7 +2907,7 @@ def request_reschedule(request, pk):
             messages.error(request, "A team in this match already has another match scheduled at that time.")
             return redirect("match_detail", pk=pk)
         RescheduleRequest.objects.create(
-            match=match, requested_by=team, new_time=new_dt,
+            match=match, requested_by=request.user, new_time=new_dt,
             new_court=new_court, reason=form.cleaned_data.get("reason", ""),
         )
         resolved = match.no_show_reports.filter(status="pending", absent_team=team)
@@ -2787,11 +2934,14 @@ def respond_reschedule(request, pk):
     rr = get_object_or_404(RescheduleRequest, pk=pk)
     team = _get_team(request.user, rr.match.tournament)
     match = rr.match
-    if not team or rr.requested_by == team:
+    if not team or rr.requested_by == request.user:
         messages.error(request, "Cannot respond to your own request.")
         return redirect("match_detail", pk=match.pk)
     if match.team1 != team and match.team2 != team:
         messages.error(request, "Not a participant.")
+        return redirect("match_detail", pk=match.pk)
+    if not _is_captain(request.user, team) and not _is_organizer(request.user):
+        messages.error(request, "Only the team captain can approve or reject reschedule requests.")
         return redirect("match_detail", pk=match.pk)
     action = request.POST.get("action")
     if action == "approve":
@@ -3193,7 +3343,7 @@ def report_no_show(request, pk):
 
     NoShowReport.objects.create(
         match=match,
-        reported_by=team,
+        reported_by=request.user,
         absent_team=opponent,
         present_team=team,
         note=request.POST.get("note", "").strip(),
@@ -3202,7 +3352,7 @@ def report_no_show(request, pk):
     log_action(
         request,
         "match_no_show_reported",
-        f"No-show reported for {match}. Absent: {opponent.name}, Reporter: {team.name}",
+        f"No-show reported for {match}. Absent: {opponent.name}, Reporter: {request.user.username}",
         tournament=match.tournament,
     )
     messages.warning(request, f"No-show reported. {opponent.name} has 24 hours to request a reschedule.")
@@ -3860,13 +4010,16 @@ def set_user_organizer(request, user_pk):
         messages.error(request, "Invalid organizer role update request.")
         return redirect("settings")
     make_organizer = role_value == "1"
-    if not make_organizer and target.is_staff:
+    if not make_organizer:
         organizer_count = _organizer_count(exclude_user_id=target.pk)
         if organizer_count < 1:
             messages.error(request, "At least one organizer account is required.")
             return redirect("settings")
-    target.is_staff = make_organizer
-    target.save(update_fields=["is_staff"])
+    
+    from .models import OrganizerProfile
+    org_profile, _ = OrganizerProfile.objects.get_or_create(user=target)
+    org_profile.verified = make_organizer
+    org_profile.save(update_fields=["verified"])
 
     action = "user_promoted_to_organizer" if make_organizer else "user_demoted_from_organizer"
     detail = f"User '{target.username}' role updated to {'organizer' if make_organizer else 'user'}."
@@ -3887,7 +4040,9 @@ def delete_user_account(request, user_pk):
     if target.is_superuser:
         messages.error(request, "Superuser accounts cannot be deleted here.")
         return redirect("settings")
-    if target.is_staff:
+    
+    from .models import OrganizerProfile
+    if hasattr(target, 'organizer_profile') and target.organizer_profile.verified:
         organizer_count = _organizer_count(exclude_user_id=target.pk)
         if organizer_count < 1:
             messages.error(request, "At least one organizer account is required.")
