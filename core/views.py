@@ -46,7 +46,7 @@ from .backup import create_backup, validate_backup, restore_backup, list_backups
 from .audit import log_action
 from .services.enrollment import active_participant_count, is_registration_capacity_reached
 
-DEFAULT_DISPUTE_WINDOW_HOURS = 24
+SEARCH_RESULT_LIMIT = 30
 CRITICAL_STAGE_DISPUTE_WINDOW_HOURS = 12
 CRITICAL_STAGE_MATCHES_THRESHOLD = 2
 
@@ -5821,5 +5821,300 @@ def organizer_announce_view(request, pk):
 
     return render(request, "core/organizer_announce.html", {
         "tournament": tournament,
+        **_tournament_context(request, tournament),
+    })
+
+
+# =============================================================================
+# FLOW 1 — Search users (9.2)
+# =============================================================================
+
+@login_required
+def user_search_view(request):
+    """Search users by username, email, or first name (9.2)."""
+    q = request.GET.get("q", "").strip()
+    results = []
+    if q:
+        qs = User.objects.filter(
+            Q(username__icontains=q) | Q(email__icontains=q) | Q(first_name__icontains=q),
+            is_superuser=False,
+            is_active=True,
+        )[:SEARCH_RESULT_LIMIT]
+        for u in qs:
+            membership = TeamMembership.objects.filter(user=u).order_by("joined_at").first()
+            team = membership.team if membership else None
+            participation_count = TeamTournamentParticipation.objects.filter(
+                team__memberships__user=u
+            ).distinct().count()
+            results.append({
+                "username": u.username,
+                "display_name": u.get_full_name() or u.username,
+                "team_name": team.name if team else None,
+                "participation_count": participation_count,
+            })
+
+    want_json = (
+        request.headers.get("Accept") == "application/json"
+        or request.GET.get("format") == "json"
+    )
+    if want_json:
+        return JsonResponse(results, safe=False)
+
+    tournament = _get_tournament(request)
+    return render(request, "core/user_search.html", {
+        "results": results,
+        "q": q,
+        **_tournament_context(request, tournament),
+    })
+
+
+# =============================================================================
+# FLOW 2 — Search teams (9.3)
+# =============================================================================
+
+@login_required
+def team_search_view(request):
+    """Search teams by name (9.3)."""
+    q = request.GET.get("q", "").strip()
+    results = []
+    if q:
+        qs = Team.objects.filter(name__icontains=q, status="active")[:SEARCH_RESULT_LIMIT]
+        for t in qs:
+            member_count = t.memberships.count()
+            active_tournament_count = TeamTournamentParticipation.objects.filter(
+                team=t, status="active"
+            ).count()
+            results.append({
+                "pk": t.pk,
+                "name": t.name,
+                "member_count": member_count,
+                "active_tournament_count": active_tournament_count,
+            })
+
+    want_json = (
+        request.headers.get("Accept") == "application/json"
+        or request.GET.get("format") == "json"
+    )
+    if want_json:
+        return JsonResponse(results, safe=False)
+
+    tournament = _get_tournament(request)
+    return render(request, "core/team_search.html", {
+        "results": results,
+        "q": q,
+        **_tournament_context(request, tournament),
+    })
+
+
+# =============================================================================
+# FLOW 3 — Organizer public page (9.4)
+# =============================================================================
+
+def organizer_public_page(request, pk):
+    """Public profile page for a verified organizer (9.4)."""
+    organizer = get_object_or_404(User, pk=pk)
+    try:
+        profile = organizer.organizer_profile
+        if not profile.verified and not organizer.is_staff:
+            from django.http import Http404
+            raise Http404
+    except OrganizerProfile.DoesNotExist:
+        if not organizer.is_staff:
+            from django.http import Http404
+            raise Http404
+        profile = None
+
+    tournaments = Tournament.objects.all().order_by("-created_at")
+    return render(request, "core/organizer_public_page.html", {
+        "organizer": organizer,
+        "profile": profile,
+        "tournaments": tournaments,
+    })
+
+
+# =============================================================================
+# FLOW 4 — Suspend/unsuspend user (11.2)
+# =============================================================================
+
+@require_POST
+@login_required
+def toggle_user_suspension(request, user_pk):
+    """Suspend or unsuspend a user account (11.2)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can suspend users.")
+        return redirect("settings")
+
+    target = get_object_or_404(User, pk=user_pk)
+
+    if target == request.user:
+        messages.error(request, "You cannot suspend yourself.")
+        return redirect("settings")
+
+    if target.is_superuser:
+        messages.error(request, "Cannot suspend a superuser.")
+        return redirect("settings")
+
+    if target.is_active:
+        target.is_active = False
+        target.save(update_fields=["is_active"])
+        log_action(request, "user_suspended", f"User '{target.username}' suspended")
+        messages.success(request, f"User '{target.username}' has been suspended.")
+    else:
+        target.is_active = True
+        target.save(update_fields=["is_active"])
+        log_action(request, "user_unsuspended", f"User '{target.username}' unsuspended")
+        messages.success(request, f"User '{target.username}' has been unsuspended.")
+
+    return redirect("settings")
+
+
+# =============================================================================
+# FLOW 5 — Impersonate user (11.7)
+# =============================================================================
+
+@login_required
+@require_POST
+def impersonate_user(request, user_pk):
+    """Admin can impersonate any user for debugging (11.7)."""
+    if not request.user.is_superuser:
+        messages.error(request, "Only admins can impersonate users.")
+        return redirect("settings")
+    target = get_object_or_404(User, pk=user_pk)
+    if target.is_superuser:
+        messages.error(request, "Cannot impersonate a superuser.")
+        return redirect("settings")
+    request.session["impersonating_original_user_pk"] = request.user.pk
+    request.session["_auth_user_id"] = str(target.pk)
+    request.session["_auth_user_backend"] = "django.contrib.auth.backends.ModelBackend"
+    log_action(request, "impersonation_started", f"Admin '{request.user.username}' impersonating '{target.username}'")
+    messages.warning(request, f"You are now impersonating {target.username}. Click 'Stop Impersonating' to return.")
+    return redirect("dashboard")
+
+
+@login_required
+def stop_impersonating(request):
+    """Stop impersonation and restore original admin session."""
+    original_pk = request.session.get("impersonating_original_user_pk")
+    if not original_pk:
+        messages.info(request, "You are not impersonating anyone.")
+        return redirect("dashboard")
+    original_user = get_object_or_404(User, pk=original_pk)
+    current_username = request.user.username
+    request.session["_auth_user_id"] = str(original_pk)
+    request.session["_auth_user_backend"] = "django.contrib.auth.backends.ModelBackend"
+    del request.session["impersonating_original_user_pk"]
+    log_action(request, "impersonation_ended", f"Admin '{original_user.username}' stopped impersonating '{current_username}'")
+    messages.success(request, "Impersonation ended.")
+    return redirect("settings")
+
+
+# =============================================================================
+# FLOW 6 — Team stats page (10.2)
+# =============================================================================
+
+@login_required
+def team_stats_view(request, pk):
+    """Show win/loss/draw stats for a team (10.2)."""
+    team = get_object_or_404(Team, pk=pk)
+
+    played_matches = Match.objects.filter(
+        Q(team1=team) | Q(team2=team),
+        status__in=["confirmed", "forfeited"],
+    )
+    total = played_matches.count()
+    wins = played_matches.filter(winner=team).count()
+    losses = played_matches.exclude(winner=team).exclude(winner=None).count()
+    draws = total - wins - losses
+
+    participations = TeamTournamentParticipation.objects.filter(team=team).select_related("tournament")
+    participation_data = []
+    for p in participations:
+        champion = getattr(p.tournament, "champion", None)
+        placement = "1st" if champion and champion == team else "—"
+        participation_data.append({"participation": p, "placement": placement})
+
+    roster = TeamMembership.objects.filter(team=team).select_related("user").order_by("joined_at")
+
+    tournament = _get_tournament(request)
+    return render(request, "core/team_stats.html", {
+        "team": team,
+        "total": total,
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "participation_data": participation_data,
+        "roster": roster,
+        **_tournament_context(request, tournament),
+    })
+
+
+# =============================================================================
+# FLOW 7 — Seed participants (3.10)
+# =============================================================================
+
+@login_required
+def seed_participants_view(request, pk):
+    """View and edit participant seeds for a tournament (3.10)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can manage seeds.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=pk)
+
+    if tournament.registration_mode == "individual":
+        participants = list(
+            TournamentIndividualRegistration.objects.filter(
+                tournament=tournament, status="active"
+            ).order_by("seed", "id")
+        )
+    else:
+        participants = list(
+            TeamTournamentParticipation.objects.filter(
+                tournament=tournament, status="active"
+            ).select_related("team").order_by("seed", "id")
+        )
+
+    if request.method == "POST":
+        action = request.POST.get("action", "save")
+
+        if action == "auto_seed":
+            for idx, p in enumerate(participants, start=1):
+                p.seed = idx
+                p.save(update_fields=["seed"])
+            log_action(request, "seeds_auto_assigned", f"Auto-seeded {len(participants)} participants for '{tournament.name}'", tournament=tournament)
+            messages.success(request, "Participants auto-seeded.")
+            return redirect("tournament_config", pk=pk)
+
+        content_type = request.META.get("CONTENT_TYPE", "")
+        if "application/json" in content_type:
+            try:
+                data = json.loads(request.body)
+                seeds = data.get("seeds", {})
+            except (json.JSONDecodeError, AttributeError):
+                return JsonResponse({"error": "Invalid JSON"}, status=400)
+        else:
+            seeds = {}
+            for key, val in request.POST.items():
+                if key.startswith("seed_"):
+                    try:
+                        p_pk = int(key[5:])
+                        seeds[p_pk] = int(val)
+                    except ValueError:
+                        pass
+
+        for p in participants:
+            new_seed = seeds.get(p.pk) if isinstance(seeds, dict) else None
+            if new_seed is not None:
+                p.seed = new_seed
+                p.save(update_fields=["seed"])
+
+        log_action(request, "seeds_updated", f"Seeds updated for '{tournament.name}'", tournament=tournament)
+        messages.success(request, "Seeds saved.")
+        return redirect("tournament_config", pk=pk)
+
+    return render(request, "core/seed_participants.html", {
+        "tournament": tournament,
+        "participants": participants,
+        "is_individual": tournament.registration_mode == "individual",
         **_tournament_context(request, tournament),
     })

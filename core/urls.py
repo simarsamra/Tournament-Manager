@@ -70,6 +70,7 @@ urlpatterns = [
     path("rescheduling/", views.rescheduling_view, name="rescheduling"),
 
     # Teams
+    path("teams/search/", views.team_search_view, name="team_search"),
     path("teams/", views.teams_view, name="teams"),
     path("team/<int:pk>/", views.team_detail, name="team_detail"),
     path("teams/create/", views.create_standalone_team_view, name="create_standalone_team"),
@@ -84,6 +85,7 @@ urlpatterns = [
     path("team/<int:pk>/transfer-captain/", views.transfer_captaincy_view, name="transfer_captaincy"),
     path("team/<int:pk>/delete/", views.delete_team_view, name="delete_team"),
     path("team/<int:pk>/history/", views.team_history_view, name="team_history"),
+    path("team/<int:pk>/stats/", views.team_stats_view, name="team_stats"),
     path("team/<int:pk>/invite/", views.team_invite_view, name="team_invite"),
     path("team-invite/<int:pk>/accept/", views.accept_team_invite, name="accept_team_invite"),
     path("team-invite/<int:pk>/decline/", views.decline_team_invite, name="decline_team_invite"),
@@ -114,6 +116,9 @@ urlpatterns = [
     path("testing/", views.test_maker_view, name="test_maker"),
     path("settings/users/<int:user_pk>/organizer/", views.set_user_organizer, name="set_user_organizer"),
     path("settings/users/<int:user_pk>/delete/", views.delete_user_account, name="delete_user_account"),
+    path("settings/users/<int:user_pk>/suspend/", views.toggle_user_suspension, name="toggle_user_suspension"),
+    path("settings/impersonate/<int:user_pk>/", views.impersonate_user, name="impersonate_user"),
+    path("settings/stop-impersonating/", views.stop_impersonating, name="stop_impersonating"),
     path("settings/organizer-applications/<int:pk>/review/", views.review_organizer_application, name="review_organizer_application"),
 
     # Public views (no login required)
@@ -125,6 +130,7 @@ urlpatterns = [
     path("tournaments/<int:pk>/", views.tournament_public_detail, name="tournament_public_detail"),
 
     # NEW: User public profile (1.5)
+    path("users/search/", views.user_search_view, name="user_search"),
     path("users/<str:username>/", views.user_public_profile, name="user_public_profile"),
 
     # NEW: My registrations (4.8)
@@ -137,4 +143,10 @@ urlpatterns = [
 
     # NEW: Organizer application (1.6)
     path("organizer/apply/", views.organizer_apply_view, name="organizer_apply"),
+
+    # NEW: Organizer public page (9.4)
+    path("organizers/<int:pk>/", views.organizer_public_page, name="organizer_public_page"),
+
+    # NEW: Seed participants (3.10)
+    path("tournament/<int:pk>/seed/", views.seed_participants_view, name="seed_participants"),
 ]

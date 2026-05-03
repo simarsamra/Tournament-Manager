@@ -95,7 +95,10 @@
                     {% for user_obj in users %}
                     <tr>
                         <td>{{ user_obj.username }}</td>
-                        <td>{% if user_obj.is_staff %}Organizer{% else %}User{% endif %}</td>
+                        <td>
+                            {% if user_obj.is_staff %}Organizer{% else %}User{% endif %}
+                            {% if not user_obj.is_active %}<span class="badge badge-danger" style="margin-left:4px;">Suspended</span>{% endif %}
+                        </td>
                         <td>
                             <div style="display:flex; gap:8px; flex-wrap:wrap;">
                                 <form method="post" action="{% url 'set_user_organizer' user_pk=user_obj.pk %}">
@@ -105,6 +108,18 @@
                                         {% if user_obj.is_staff %}Demote{% else %}Promote to Organizer{% endif %}
                                     </button>
                                 </form>
+                                <form method="post" action="{% url 'toggle_user_suspension' user_pk=user_obj.pk %}">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn {% if user_obj.is_active %}btn-warning{% else %}btn-success{% endif %}">
+                                        {% if user_obj.is_active %}Suspend{% else %}Unsuspend{% endif %}
+                                    </button>
+                                </form>
+                                {% if user.is_superuser %}
+                                <form method="post" action="{% url 'impersonate_user' user_pk=user_obj.pk %}" onsubmit="return confirm('Impersonate {{ user_obj.username|escapejs }}?');">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-outline">Impersonate</button>
+                                </form>
+                                {% endif %}
                                 <form method="post" action="{% url 'delete_user_account' user_pk=user_obj.pk %}" onsubmit="return confirm('Delete user account {{ user_obj.username|escapejs }}?');">
                                     {% csrf_token %}
                                     <button type="submit" class="btn btn-danger">Delete User</button>

@@ -11,6 +11,12 @@
 </head>
 <body>
 {% if user.is_authenticated %}
+{% if request.session.impersonating_original_user_pk %}
+<div style="background:var(--warning,#f39c12);color:#000;padding:0.5rem 1rem;text-align:center;font-weight:600;z-index:9999;position:sticky;top:0;">
+    ⚠️ Impersonating <strong>{{ request.user.username }}</strong> —
+    <a href="{% url 'stop_impersonating' %}" style="color:#000;text-decoration:underline;">Stop Impersonating</a>
+</div>
+{% endif %}
 <div class="app-layout">
     <aside class="sidebar">
         <div class="sidebar-brand">
