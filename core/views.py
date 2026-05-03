@@ -24,7 +24,8 @@ from .models import (
     Tournament, Court, TimeSlot, Team, Match,
     RescheduleRequest, NoShowReport, OpenSlot, AuditLog, BackupRecord, Player, CourtAvailability,
     TeamMembership, TeamTournamentParticipation, TeamTournamentCourtPreference,
-    TournamentIndividualRegistration,
+    TournamentIndividualRegistration, Notification, TeamInvite, OrganizerApplication,
+    OrganizerProfile,
 )
 from .forms import (
     TournamentForm, CourtForm, TimeSlotForm, TeamRegistrationForm,
@@ -887,6 +888,35 @@ def _build_open_slot_choices(match, slots):
         }
         for slot in slots
     ]
+
+
+# -- Notification helper --
+
+def _notify(users, notification_type, message, link="", tournament=None):
+    """Create Notification records for one or multiple users.
+
+    Args:
+        users: A single User instance or an iterable of User instances.
+        notification_type: One of the Notification.NOTIFICATION_TYPES keys.
+        message: Human-readable message text.
+        link: Optional URL the notification links to.
+        tournament: Optional Tournament FK value.
+    """
+    from django.contrib.auth.models import User as _User
+    if isinstance(users, _User):
+        users = [users]
+    notifications = [
+        Notification(
+            user=u,
+            notification_type=notification_type,
+            message=message,
+            link=link,
+            tournament=tournament,
+        )
+        for u in users
+    ]
+    if notifications:
+        Notification.objects.bulk_create(notifications)
 
 
 # -- Auth Views --
@@ -3040,7 +3070,10 @@ def submit_score(request, pk):
     if not is_organizer and not is_participant:
         messages.error(request, "You are not a participant in this match.")
         return redirect("match_detail", pk=pk)
-    if match.tournament.status not in ("active",):
+    if match.tournament.status == "paused" and not is_organizer:
+        messages.error(request, "The tournament is currently paused. Score submission is not allowed.")
+        return redirect("match_detail", pk=pk)
+    if match.tournament.status not in ("active", "paused"):
         messages.error(request, "Scores can only be submitted once the tournament has started.")
         return redirect("match_detail", pk=pk)
     if match.tournament.status == "completed":
@@ -4520,6 +4553,7 @@ def settings_view(request):
         "form": form,
         "is_settings_locked": is_settings_locked,
         "users": User.objects.filter(is_superuser=False).order_by("username"),
+        "organizer_applications": OrganizerApplication.objects.order_by("-created_at"),
         **_tournament_context(request, tournament),
     })
 
@@ -4853,3 +4887,939 @@ def delete_team_view(request, pk):
     messages.success(request, f"Team '{team_name}' has been deleted.")
     return redirect("dashboard")
 
+
+# =============================================================================
+# SECTION 8 — NOTIFICATION VIEWS
+# =============================================================================
+
+@login_required
+def notifications_view(request):
+    """List all notifications for the current user (8.1, 8.3)."""
+    notifications = Notification.objects.filter(user=request.user).order_by("-created_at")[:100]
+    unread_count = Notification.objects.filter(user=request.user, is_read=False).count()
+    tournament = _get_tournament(request)
+    return render(request, "core/notifications.html", {
+        "notifications": notifications,
+        "unread_count": unread_count,
+        **_tournament_context(request, tournament),
+    })
+
+
+@login_required
+@require_POST
+def mark_notifications_read(request):
+    """Mark all notifications as read (8.3)."""
+    Notification.objects.filter(user=request.user, is_read=False).update(is_read=True)
+    return redirect("notifications")
+
+
+@login_required
+@require_POST
+def mark_notification_read(request, pk):
+    """Mark a single notification as read and redirect to its link (8.3)."""
+    notif = get_object_or_404(Notification, pk=pk, user=request.user)
+    notif.is_read = True
+    notif.save(update_fields=["is_read"])
+    if notif.link:
+        return redirect(notif.link)
+    return redirect("notifications")
+
+
+# =============================================================================
+# SECTION 1.5 — USER PUBLIC PROFILE
+# =============================================================================
+
+def user_public_profile(request, username):
+    """Public profile page for any user (1.5)."""
+    profile_user = get_object_or_404(User, username=username)
+    # Gather teams the user is/was part of (non-internal)
+    memberships = (
+        TeamMembership.objects.filter(user=profile_user, team__is_internal=False)
+        .select_related("team")
+        .order_by("team__name")
+    )
+    # Tournament history via team participations
+    participations = (
+        TeamTournamentParticipation.objects.filter(
+            team__memberships__user=profile_user,
+            team__is_internal=False,
+        )
+        .select_related("team", "tournament")
+        .order_by("-tournament__created_at")
+        .distinct()
+    )
+    # Individual registrations
+    individual_regs = (
+        TournamentIndividualRegistration.objects.filter(user=profile_user)
+        .select_related("tournament")
+        .order_by("-tournament__created_at")
+    )
+    # Win / loss counts from confirmed matches
+    teams = [m.team for m in memberships]
+    wins = 0
+    losses = 0
+    if teams:
+        team_ids = [t.pk for t in teams]
+        wins = Match.objects.filter(winner_id__in=team_ids, status="confirmed").count()
+        losses = (
+            Match.objects.filter(
+                status="confirmed",
+                team1_id__in=team_ids,
+                winner__isnull=False,
+            ).exclude(winner_id__in=team_ids).count()
+            + Match.objects.filter(
+                status="confirmed",
+                team2_id__in=team_ids,
+                winner__isnull=False,
+            ).exclude(winner_id__in=team_ids).count()
+        )
+    tournament = _get_tournament(request) if request.user.is_authenticated else None
+    ctx = {
+        "profile_user": profile_user,
+        "memberships": memberships,
+        "participations": participations,
+        "individual_regs": individual_regs,
+        "wins": wins,
+        "losses": losses,
+    }
+    if request.user.is_authenticated:
+        ctx.update(_tournament_context(request, tournament))
+    return render(request, "core/user_public_profile.html", ctx)
+
+
+# =============================================================================
+# SECTION 1.6 — ORGANIZER APPLICATION
+# =============================================================================
+
+@login_required
+def organizer_apply_view(request):
+    """Apply for an organizer account (1.6)."""
+    # Already an organizer
+    if _is_organizer(request.user):
+        messages.info(request, "You are already an approved organizer.")
+        return redirect("dashboard")
+
+    # Already applied
+    existing = OrganizerApplication.objects.filter(user=request.user).first()
+    tournament = _get_tournament(request)
+
+    if request.method == "POST":
+        if existing and existing.status == "pending":
+            messages.warning(request, "Your application is already pending review.")
+            return redirect("organizer_apply")
+
+        org_name = request.POST.get("org_name", "").strip()
+        description = request.POST.get("description", "").strip()
+
+        if not org_name or not description:
+            messages.error(request, "Please fill in all fields.")
+        else:
+            if existing:
+                existing.org_name = org_name
+                existing.description = description
+                existing.status = "pending"
+                existing.save()
+            else:
+                OrganizerApplication.objects.create(
+                    user=request.user,
+                    org_name=org_name,
+                    description=description,
+                )
+            # Notify all existing admins/organizers
+            admin_users = User.objects.filter(is_superuser=True)
+            _notify(
+                admin_users,
+                "organizer_application_result",
+                f"{request.user.username} has applied for an organizer account.",
+                link="/settings/",
+            )
+            log_action(request, "organizer_applied", f"User '{request.user.username}' applied for organizer status")
+            messages.success(request, "Your application has been submitted. An admin will review it soon.")
+            return redirect("dashboard")
+    return render(request, "core/organizer_apply.html", {
+        "existing": existing,
+        **_tournament_context(request, tournament),
+    })
+
+
+@login_required
+@require_POST
+def review_organizer_application(request, pk):
+    """Admin action to approve or reject an organizer application (1.7)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can review applications.")
+        return redirect("settings")
+
+    application = get_object_or_404(OrganizerApplication, pk=pk)
+    action = request.POST.get("action", "")
+
+    if action == "approve":
+        application.status = "approved"
+        application.reviewed_by = request.user
+        application.reviewed_at = timezone.now()
+        application.save()
+        # Create or update OrganizerProfile
+        profile, _ = OrganizerProfile.objects.get_or_create(user=application.user)
+        profile.org_name = application.org_name
+        profile.verified = True
+        profile.save()
+        _notify(
+            application.user,
+            "organizer_application_result",
+            "Your organizer application has been approved! You can now create and manage tournaments.",
+            link="/dashboard/",
+        )
+        log_action(request, "organizer_approved", f"Organizer application approved for '{application.user.username}'")
+        messages.success(request, f"Application for '{application.user.username}' approved.")
+    elif action == "reject":
+        application.status = "rejected"
+        application.reviewed_by = request.user
+        application.reviewed_at = timezone.now()
+        application.save()
+        _notify(
+            application.user,
+            "organizer_application_result",
+            "Your organizer application has been rejected. Please contact an admin for more information.",
+            link="/organizer/apply",
+        )
+        log_action(request, "organizer_rejected", f"Organizer application rejected for '{application.user.username}'")
+        messages.success(request, f"Application for '{application.user.username}' rejected.")
+    else:
+        messages.error(request, "Invalid action.")
+
+    return redirect("settings")
+
+
+# =============================================================================
+# SECTION 2.2–2.4 — TEAM INVITE FLOWS
+# =============================================================================
+
+@login_required
+def team_invite_view(request, pk):
+    """Captain invites a user to the team (2.2)."""
+    team = get_object_or_404(Team, pk=pk)
+    if not _is_captain(request.user, team):
+        messages.error(request, "Only the team captain can send invites.")
+        return redirect("team_detail", pk=pk)
+
+    if request.method == "POST":
+        username = request.POST.get("username", "").strip()
+        if not username:
+            messages.error(request, "Please enter a username.")
+        else:
+            try:
+                target_user = User.objects.get(username=username)
+            except User.DoesNotExist:
+                messages.error(request, f"No user found with username '{username}'.")
+                return redirect("team_invite", pk=pk)
+
+            if target_user == request.user:
+                messages.error(request, "You cannot invite yourself.")
+                return redirect("team_invite", pk=pk)
+
+            # Check they are not already a member
+            if TeamMembership.objects.filter(team=team, user=target_user).exists():
+                messages.error(request, f"{username} is already a member of this team.")
+                return redirect("team_invite", pk=pk)
+
+            # Create or update invite
+            invite, created = TeamInvite.objects.get_or_create(
+                team=team,
+                invited_user=target_user,
+                defaults={"invited_by": request.user},
+            )
+            if not created and invite.status == "pending":
+                messages.warning(request, f"An invite for {username} is already pending.")
+                return redirect("team_invite", pk=pk)
+            elif not created:
+                invite.status = "pending"
+                invite.invited_by = request.user
+                invite.save()
+
+            _notify(
+                target_user,
+                "team_invite_received",
+                f"You have been invited to join {team.name} by {request.user.username}.",
+                link=f"/teams/{team.pk}/invites/",
+            )
+            log_action(request, "team_invite_sent", f"Invite sent to '{username}' for team '{team.name}'")
+            messages.success(request, f"Invite sent to {username}.")
+            return redirect("team_detail", pk=pk)
+
+    tournament = _get_tournament(request)
+    pending_invites = TeamInvite.objects.filter(team=team, status="pending").select_related("invited_user")
+    return render(request, "core/team_invite.html", {
+        "team": team,
+        "pending_invites": pending_invites,
+        **_tournament_context(request, tournament),
+    })
+
+
+@login_required
+@require_POST
+def accept_team_invite(request, pk):
+    """Accept a team invite (2.3)."""
+    invite = get_object_or_404(TeamInvite, pk=pk, invited_user=request.user)
+    if invite.status != "pending":
+        messages.error(request, "This invite is no longer active.")
+        return redirect("notifications")
+
+    team = invite.team
+    # Check not already a member
+    if TeamMembership.objects.filter(team=team, user=request.user).exists():
+        invite.status = "accepted"
+        invite.save()
+        messages.info(request, f"You are already a member of {team.name}.")
+        return redirect("team_detail", pk=team.pk)
+
+    TeamMembership.objects.create(team=team, user=request.user, role="member")
+
+    # Update active team
+    from .models import UserTeamAssignment
+    assignment, _ = UserTeamAssignment.objects.get_or_create(user=request.user)
+    assignment.active_team = team
+    assignment.save()
+
+    invite.status = "accepted"
+    invite.save()
+
+    # Notify captain
+    captain_membership = TeamMembership.objects.filter(team=team, role="captain").select_related("user").first()
+    if captain_membership:
+        _notify(
+            captain_membership.user,
+            "team_invite_accepted",
+            f"{request.user.username} accepted your invite to join {team.name}.",
+            link=f"/team/{team.pk}/",
+        )
+
+    log_action(request, "team_invite_accepted", f"User '{request.user.username}' joined team '{team.name}'")
+    messages.success(request, f"You have joined {team.name}!")
+    return redirect("team_detail", pk=team.pk)
+
+
+@login_required
+@require_POST
+def decline_team_invite(request, pk):
+    """Decline a team invite (2.4)."""
+    invite = get_object_or_404(TeamInvite, pk=pk, invited_user=request.user)
+    if invite.status != "pending":
+        messages.error(request, "This invite is no longer active.")
+        return redirect("notifications")
+
+    invite.status = "declined"
+    invite.save()
+
+    # Notify captain
+    captain_membership = TeamMembership.objects.filter(team=invite.team, role="captain").select_related("user").first()
+    if captain_membership:
+        _notify(
+            captain_membership.user,
+            "team_invite_declined",
+            f"{request.user.username} declined your invite to join {invite.team.name}.",
+            link=f"/team/{invite.team.pk}/",
+        )
+
+    log_action(request, "team_invite_declined", f"User '{request.user.username}' declined invite to '{invite.team.name}'")
+    messages.info(request, f"You declined the invite to join {invite.team.name}.")
+    return redirect("notifications")
+
+
+@login_required
+def my_invites_view(request):
+    """List all pending team invites for the current user."""
+    invites = TeamInvite.objects.filter(
+        invited_user=request.user, status="pending"
+    ).select_related("team", "invited_by")
+    tournament = _get_tournament(request)
+    return render(request, "core/my_invites.html", {
+        "invites": invites,
+        **_tournament_context(request, tournament),
+    })
+
+
+# =============================================================================
+# SECTION 2.11 — TEAM TOURNAMENT HISTORY
+# =============================================================================
+
+def team_history_view(request, pk):
+    """Team tournament history (2.11)."""
+    team = get_object_or_404(Team, pk=pk, is_internal=False)
+    participations = (
+        TeamTournamentParticipation.objects.filter(team=team)
+        .select_related("tournament")
+        .order_by("-tournament__created_at")
+    )
+    tournament = _get_tournament(request) if request.user.is_authenticated else None
+    ctx = {
+        "team": team,
+        "participations": participations,
+    }
+    if request.user.is_authenticated:
+        ctx.update(_tournament_context(request, tournament))
+    return render(request, "core/team_history.html", ctx)
+
+
+# =============================================================================
+# SECTION 4.1–4.2 — PUBLIC TOURNAMENT LIST & DETAIL
+# =============================================================================
+
+def tournament_list_view(request):
+    """Public tournament browse page (4.1)."""
+    qs = Tournament.objects.exclude(status="cancelled")
+
+    # Filters
+    mode_filter = request.GET.get("mode", "")
+    status_filter = request.GET.get("status", "")
+    sport_filter = request.GET.get("sport", "")
+    search_q = request.GET.get("q", "").strip()
+
+    if mode_filter:
+        qs = qs.filter(registration_mode=mode_filter)
+    if status_filter:
+        qs = qs.filter(status=status_filter)
+    if sport_filter:
+        qs = qs.filter(sport_type=sport_filter)
+    if search_q:
+        qs = qs.filter(name__icontains=search_q)
+
+    qs = qs.order_by("start_date", "-created_at")
+
+    tournament = _get_tournament(request) if request.user.is_authenticated else None
+    ctx = {
+        "tournaments": qs,
+        "mode_filter": mode_filter,
+        "status_filter": status_filter,
+        "sport_filter": sport_filter,
+        "search_q": search_q,
+        "sport_choices": Tournament.SPORT_CHOICES,
+        "status_choices": [
+            ("registration_open", "Open Registration"),
+            ("active", "In Progress"),
+            ("completed", "Completed"),
+            ("setup", "Coming Soon"),
+        ],
+    }
+    if request.user.is_authenticated:
+        ctx.update(_tournament_context(request, tournament))
+    return render(request, "core/tournament_list.html", ctx)
+
+
+def tournament_public_detail(request, pk):
+    """Public tournament detail page (4.2)."""
+    tournament = get_object_or_404(Tournament, pk=pk)
+
+    # Participants
+    if tournament.registration_mode == "individual":
+        participants = list(
+            TournamentIndividualRegistration.objects.filter(tournament=tournament, status="active")
+            .select_related("user")
+            .order_by("display_name")
+        )
+    else:
+        participants = list(
+            TeamTournamentParticipation.objects.filter(tournament=tournament, status="active", team__is_internal=False)
+            .select_related("team")
+            .order_by("team__name")
+        )
+
+    # Bracket / standings for completed / active
+    matches = (
+        tournament.matches.filter(team1__isnull=False, team2__isnull=False)
+        .select_related("team1", "team2", "court")
+        .order_by("round_number", "match_number")
+    )
+
+    is_registered = False
+    if request.user.is_authenticated:
+        is_registered = _is_user_enrolled_in_tournament(request.user, tournament)
+
+    ctx = {
+        "tournament": tournament,
+        "participants": participants,
+        "matches": matches,
+        "is_registered": is_registered,
+        "participant_count": len(participants),
+    }
+    if request.user.is_authenticated:
+        ctx.update(_tournament_context(request, tournament))
+    return render(request, "core/tournament_public_detail.html", ctx)
+
+
+# =============================================================================
+# SECTION 4.8 — MY REGISTRATIONS
+# =============================================================================
+
+@login_required
+def my_registrations_view(request):
+    """List all current and past registrations for the current user (4.8)."""
+    # Team registrations via memberships
+    team_participations = (
+        TeamTournamentParticipation.objects.filter(
+            team__memberships__user=request.user,
+            team__is_internal=False,
+        )
+        .select_related("team", "tournament")
+        .order_by("-tournament__created_at")
+        .distinct()
+    )
+    # Individual registrations
+    individual_regs = (
+        TournamentIndividualRegistration.objects.filter(user=request.user)
+        .select_related("tournament")
+        .order_by("-tournament__created_at")
+    )
+    tournament = _get_tournament(request)
+    return render(request, "core/my_registrations.html", {
+        "team_participations": team_participations,
+        "individual_regs": individual_regs,
+        **_tournament_context(request, tournament),
+    })
+
+
+# =============================================================================
+# SECTION 3.7–3.9 — REGISTRATION REVIEW (ORGANIZER)
+# =============================================================================
+
+@login_required
+def registration_review_view(request, pk):
+    """Organizer reviews all registrations for a tournament (3.7)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can review registrations.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=pk)
+
+    if tournament.registration_mode == "individual":
+        registrations = list(
+            TournamentIndividualRegistration.objects.filter(tournament=tournament)
+            .select_related("user")
+            .order_by("status", "display_name")
+        )
+        team_regs = []
+    else:
+        registrations = []
+        team_regs = list(
+            TeamTournamentParticipation.objects.filter(tournament=tournament, team__is_internal=False)
+            .select_related("team")
+            .prefetch_related("team__memberships__user")
+            .order_by("status", "team__name")
+        )
+
+    return render(request, "core/registration_review.html", {
+        "tournament": tournament,
+        "registrations": registrations,
+        "team_regs": team_regs,
+        **_tournament_context(request, tournament),
+    })
+
+
+@login_required
+@require_POST
+def approve_registration(request, tournament_pk, reg_pk):
+    """Organizer approves a pending registration (3.8)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can approve registrations.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=tournament_pk)
+
+    # Try individual registration first, then team participation
+    reg = (
+        TournamentIndividualRegistration.objects.filter(pk=reg_pk, tournament=tournament).first()
+        or TeamTournamentParticipation.objects.filter(pk=reg_pk, tournament=tournament, team__is_internal=False).first()
+    )
+    if not reg:
+        messages.error(request, "Registration not found.")
+        return redirect("registration_review", pk=tournament_pk)
+
+    reg.status = "active"
+    reg.save(update_fields=["status", "updated_at"])
+
+    # Notify relevant users
+    if hasattr(reg, "user"):
+        notify_users = [reg.user]
+        name = reg.display_name
+    else:
+        notify_users = list(User.objects.filter(memberships__team=reg.team))
+        name = reg.team.name
+
+    _notify(
+        notify_users,
+        "registration_approved",
+        f"Your registration for {tournament.name} has been approved!",
+        link=f"/tournaments/{tournament.pk}/",
+        tournament=tournament,
+    )
+
+    log_action(
+        request, "registration_approved",
+        f"Registration for '{name}' approved in '{tournament.name}'",
+        tournament=tournament,
+    )
+    messages.success(request, f"Registration for '{name}' approved.")
+    return redirect("registration_review", pk=tournament_pk)
+
+
+@login_required
+@require_POST
+def reject_registration(request, tournament_pk, reg_pk):
+    """Organizer rejects a pending registration (3.9)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can reject registrations.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=tournament_pk)
+    reason = request.POST.get("reason", "").strip()
+
+    reg = (
+        TournamentIndividualRegistration.objects.filter(pk=reg_pk, tournament=tournament).first()
+        or TeamTournamentParticipation.objects.filter(pk=reg_pk, tournament=tournament, team__is_internal=False).first()
+    )
+    if not reg:
+        messages.error(request, "Registration not found.")
+        return redirect("registration_review", pk=tournament_pk)
+
+    reg.status = "withdrawn"
+    reg.save(update_fields=["status", "updated_at"])
+
+    # Notify relevant users
+    if hasattr(reg, "user"):
+        notify_users = [reg.user]
+        name = reg.display_name
+    else:
+        notify_users = list(User.objects.filter(memberships__team=reg.team))
+        name = reg.team.name
+
+    reason_text = f" Reason: {reason}" if reason else ""
+    _notify(
+        notify_users,
+        "registration_rejected",
+        f"Your registration for {tournament.name} has been rejected.{reason_text}",
+        link=f"/tournaments/{tournament.pk}/",
+        tournament=tournament,
+    )
+
+    log_action(
+        request, "registration_rejected",
+        f"Registration for '{name}' rejected in '{tournament.name}'{reason_text}",
+        tournament=tournament,
+    )
+    messages.success(request, f"Registration for '{name}' rejected.")
+    return redirect("registration_review", pk=tournament_pk)
+
+
+# =============================================================================
+# SECTION 3.14 — CANCEL TOURNAMENT
+# =============================================================================
+
+@login_required
+@require_POST
+def cancel_tournament(request, pk):
+    """Cancel a tournament and notify all registered participants (3.14)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can cancel tournaments.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=pk)
+
+    if tournament.status in ("completed", "cancelled"):
+        messages.error(request, f"Cannot cancel a tournament that is already {tournament.status}.")
+        return redirect("settings")
+
+    if request.POST.get("confirm_cancel", "").strip().upper() != "CANCEL":
+        messages.error(request, "Please type CANCEL to confirm.")
+        return redirect("settings")
+
+    tournament.status = "cancelled"
+    tournament.save(update_fields=["status"])
+
+    # Collect all enrolled users for notification
+    if tournament.registration_mode == "individual":
+        enrolled_users = list(
+            User.objects.filter(
+                individual_registrations__tournament=tournament,
+                individual_registrations__status="active",
+            ).distinct()
+        )
+    else:
+        enrolled_users = list(
+            User.objects.filter(
+                memberships__team__participations__tournament=tournament,
+                memberships__team__is_internal=False,
+            ).distinct()
+        )
+
+    if enrolled_users:
+        _notify(
+            enrolled_users,
+            "tournament_cancelled",
+            f"The tournament '{tournament.name}' has been cancelled.",
+            link=f"/tournaments/{tournament.pk}/",
+            tournament=tournament,
+        )
+
+    log_action(
+        request, "tournament_cancelled",
+        f"Tournament '{tournament.name}' cancelled",
+        tournament=tournament,
+    )
+    messages.success(request, f"Tournament '{tournament.name}' has been cancelled.")
+    return redirect("dashboard")
+
+
+# =============================================================================
+# SECTION 3.15 — DUPLICATE TOURNAMENT
+# =============================================================================
+
+@login_required
+@require_POST
+def duplicate_tournament(request, pk):
+    """Create a new tournament with same config but no participants or matches (3.15)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can duplicate tournaments.")
+        return redirect("dashboard")
+
+    source = get_object_or_404(Tournament, pk=pk)
+    new_name = f"Copy of {source.name}"
+
+    new_tournament = Tournament.objects.create(
+        name=new_name,
+        sport_type=source.sport_type,
+        registration_mode=source.registration_mode,
+        format=source.format,
+        players_per_team=source.players_per_team,
+        status="setup",
+        points_per_win=source.points_per_win,
+        points_per_loss=source.points_per_loss,
+        points_per_draw=source.points_per_draw,
+        tiebreaker_order=source.tiebreaker_order,
+        num_groups=source.num_groups,
+        teams_per_group_advance=source.teams_per_group_advance,
+        withdrawal_policy=source.withdrawal_policy,
+        default_match_duration=source.default_match_duration,
+        expected_teams_count=source.expected_teams_count,
+    )
+    # Set this as the organizer's selected tournament
+    request.session["selected_tournament_id"] = new_tournament.pk
+
+    log_action(
+        request, "tournament_duplicated",
+        f"Tournament '{source.name}' duplicated as '{new_name}'",
+        tournament=new_tournament,
+    )
+    messages.success(request, f"Tournament duplicated as '{new_name}'. Please update the dates and settings.")
+    return redirect("tournament_config", pk=new_tournament.pk)
+
+
+# =============================================================================
+# SECTION 7.2 — DISQUALIFY TEAM
+# =============================================================================
+
+@login_required
+@require_POST
+def disqualify_team(request, tournament_pk, participation_pk):
+    """Organizer disqualifies a team mid-tournament (7.2)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can disqualify teams.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=tournament_pk)
+    participation = get_object_or_404(
+        TeamTournamentParticipation, pk=participation_pk, tournament=tournament
+    )
+    reason = request.POST.get("reason", "").strip()
+
+    participation.status = "withdrawn"
+    participation.withdrawn_at = timezone.now()
+    participation.save(update_fields=["status", "withdrawn_at", "updated_at"])
+
+    # Forfeit any active/upcoming matches for this team
+    team = participation.team
+    active_matches = tournament.matches.filter(
+        status__in=("upcoming", "in_progress", "pending_confirmation"),
+    ).filter(Q(team1=team) | Q(team2=team))
+
+    for match in active_matches:
+        opponent = match.get_opponent(team)
+        if opponent:
+            match.status = "forfeited"
+            match.winner = opponent
+            match.notes = (match.notes + "\n" if match.notes else "") + f"Disqualification: {team.name}. {reason}"
+            match.save()
+            if tournament.format in ("knockout", "double_elimination", "consolation", "hybrid"):
+                from .standings import advance_winner
+                advance_winner(match)
+            _check_and_finalize_tournament(tournament)
+
+    # Notify team members
+    team_users = list(User.objects.filter(memberships__team=team))
+    reason_text = f" Reason: {reason}" if reason else ""
+    _notify(
+        team_users,
+        "disqualified",
+        f"Your team {team.name} has been disqualified from {tournament.name}.{reason_text}",
+        link=f"/tournaments/{tournament.pk}/",
+        tournament=tournament,
+    )
+
+    log_action(
+        request, "team_disqualified",
+        f"Team '{team.name}' disqualified from '{tournament.name}'.{reason_text}",
+        tournament=tournament,
+    )
+    messages.success(request, f"Team '{team.name}' has been disqualified.")
+    return redirect("registration_review", pk=tournament_pk)
+
+
+# =============================================================================
+# SECTION 7.5–7.6 — PAUSE / RESUME TOURNAMENT
+# =============================================================================
+
+@login_required
+@require_POST
+def pause_tournament(request, pk):
+    """Pause an active tournament (7.5)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can pause tournaments.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=pk)
+    if tournament.status != "active":
+        messages.error(request, "Only active tournaments can be paused.")
+        return redirect("dashboard")
+
+    tournament.status = "paused"
+    tournament.save(update_fields=["status"])
+
+    # Notify all enrolled participants
+    if tournament.registration_mode == "individual":
+        enrolled_users = list(
+            User.objects.filter(
+                individual_registrations__tournament=tournament,
+                individual_registrations__status="active",
+            ).distinct()
+        )
+    else:
+        enrolled_users = list(
+            User.objects.filter(
+                memberships__team__participations__tournament=tournament,
+                memberships__team__is_internal=False,
+            ).distinct()
+        )
+
+    if enrolled_users:
+        _notify(
+            enrolled_users,
+            "tournament_paused",
+            f"The tournament '{tournament.name}' has been paused. No new results can be submitted.",
+            link=f"/tournaments/{tournament.pk}/",
+            tournament=tournament,
+        )
+
+    log_action(request, "tournament_paused", f"Tournament '{tournament.name}' paused", tournament=tournament)
+    messages.success(request, f"Tournament '{tournament.name}' has been paused.")
+    return redirect("dashboard")
+
+
+@login_required
+@require_POST
+def resume_tournament(request, pk):
+    """Resume a paused tournament (7.6)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can resume tournaments.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=pk)
+    if tournament.status != "paused":
+        messages.error(request, "Only paused tournaments can be resumed.")
+        return redirect("dashboard")
+
+    tournament.status = "active"
+    tournament.save(update_fields=["status"])
+
+    # Notify all enrolled participants
+    if tournament.registration_mode == "individual":
+        enrolled_users = list(
+            User.objects.filter(
+                individual_registrations__tournament=tournament,
+                individual_registrations__status="active",
+            ).distinct()
+        )
+    else:
+        enrolled_users = list(
+            User.objects.filter(
+                memberships__team__participations__tournament=tournament,
+                memberships__team__is_internal=False,
+            ).distinct()
+        )
+
+    if enrolled_users:
+        _notify(
+            enrolled_users,
+            "tournament_resumed",
+            f"The tournament '{tournament.name}' has resumed. Match results can be submitted again.",
+            link=f"/tournaments/{tournament.pk}/",
+            tournament=tournament,
+        )
+
+    log_action(request, "tournament_resumed", f"Tournament '{tournament.name}' resumed", tournament=tournament)
+    messages.success(request, f"Tournament '{tournament.name}' has been resumed.")
+    return redirect("dashboard")
+
+
+# =============================================================================
+# SECTION 8.4 — ORGANIZER ANNOUNCEMENT
+# =============================================================================
+
+@login_required
+def organizer_announce_view(request, pk):
+    """Organizer sends a message to all approved participants (8.4)."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can make announcements.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=pk)
+
+    if request.method == "POST":
+        message_text = request.POST.get("message", "").strip()
+        if not message_text:
+            messages.error(request, "Please enter an announcement message.")
+        else:
+            # Collect enrolled users
+            if tournament.registration_mode == "individual":
+                enrolled_users = list(
+                    User.objects.filter(
+                        individual_registrations__tournament=tournament,
+                        individual_registrations__status="active",
+                    ).distinct()
+                )
+            else:
+                enrolled_users = list(
+                    User.objects.filter(
+                        memberships__team__participations__tournament=tournament,
+                        memberships__team__is_internal=False,
+                    ).distinct()
+                )
+
+            if enrolled_users:
+                _notify(
+                    enrolled_users,
+                    "organizer_announcement",
+                    f"[{tournament.name}] {message_text}",
+                    link=f"/tournaments/{tournament.pk}/",
+                    tournament=tournament,
+                )
+
+            log_action(
+                request, "organizer_announcement",
+                f"Announcement sent for '{tournament.name}': {message_text[:100]}",
+                tournament=tournament,
+            )
+            messages.success(request, f"Announcement sent to {len(enrolled_users)} participant(s).")
+            return redirect("organizer_announce", pk=pk)
+
+    return render(request, "core/organizer_announce.html", {
+        "tournament": tournament,
+        **_tournament_context(request, tournament),
+    })

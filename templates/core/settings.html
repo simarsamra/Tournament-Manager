@@ -44,6 +44,31 @@
 <div class="card" style="max-width:700px; margin-top:1rem; border:1px solid #ef4444;">
     <div class="card-body">
         <h3 style="margin-top:0; color:#b91c1c;">Danger Zone</h3>
+        <div style="display:flex;flex-wrap:wrap;gap:0.75rem;margin-bottom:0.75rem;">
+            {% if tournament.status == 'active' %}
+            <form method="post" action="{% url 'pause_tournament' pk=tournament.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-secondary">⏸ Pause Tournament</button>
+            </form>
+            {% elif tournament.status == 'paused' %}
+            <form method="post" action="{% url 'resume_tournament' pk=tournament.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-primary">▶ Resume Tournament</button>
+            </form>
+            {% endif %}
+            {% if tournament.status not in 'completed,cancelled' %}
+            <form method="post" action="{% url 'cancel_tournament' pk=tournament.pk %}"
+                  onsubmit="return confirm('Cancel this tournament? All participants will be notified.');">
+                {% csrf_token %}
+                <input type="hidden" name="confirm_cancel" value="CANCEL">
+                <button type="submit" class="btn btn-secondary" style="color:#b91c1c;">✕ Cancel Tournament</button>
+            </form>
+            {% endif %}
+            <form method="post" action="{% url 'duplicate_tournament' pk=tournament.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn-secondary">📋 Duplicate Tournament</button>
+            </form>
+        </div>
         <p class="text-muted">Delete this tournament and its related teams, matches, courts, and time slots.</p>
         <form method="post" action="{% url 'delete_tournament' pk=tournament.pk %}" onsubmit="return confirm('Delete this tournament permanently?');">
             {% csrf_token %}
@@ -95,5 +120,48 @@
 </div>
 {% else %}
 <p class="text-muted">No tournament configured.</p>
+{% endif %}
+
+{% if user.is_staff %}
+<div class="card" style="max-width:900px; margin-top:1rem;">
+    <div class="card-body">
+        <h3 style="margin-top:0;">Organizer Applications</h3>
+        {% with pending_apps=organizer_applications %}
+        {% if pending_apps %}
+        <div style="overflow-x:auto;">
+            <table class="table">
+                <thead><tr><th>Applicant</th><th>Organization</th><th>Applied</th><th>Status</th><th>Actions</th></tr></thead>
+                <tbody>
+                {% for app in pending_apps %}
+                <tr>
+                    <td>{{ app.user.username }}</td>
+                    <td>{{ app.org_name }}</td>
+                    <td class="text-muted">{{ app.created_at|date:"M j, Y" }}</td>
+                    <td><span class="badge {% if app.status == 'pending' %}badge-warning{% elif app.status == 'approved' %}badge-success{% else %}badge-danger{% endif %}">{{ app.get_status_display }}</span></td>
+                    <td>
+                        {% if app.status == 'pending' %}
+                        <form method="post" action="{% url 'review_organizer_application' pk=app.pk %}" style="display:inline;">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="approve">
+                            <button type="submit" class="btn btn-primary btn-sm">✓ Approve</button>
+                        </form>
+                        <form method="post" action="{% url 'review_organizer_application' pk=app.pk %}" style="display:inline;">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="reject">
+                            <button type="submit" class="btn btn-outline btn-sm">✗ Reject</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted">No organizer applications.</p>
+        {% endif %}
+        {% endwith %}
+    </div>
+</div>
 {% endif %}
 {% endblock %}
