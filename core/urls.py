@@ -149,4 +149,7 @@ urlpatterns = [
 
     # NEW: Seed participants (3.10)
     path("tournament/<int:pk>/seed/", views.seed_participants_view, name="seed_participants"),
+
+    # NEW: Substitute player management (7.3)
+    path("tournament/<int:pk>/teams/<int:participation_pk>/sub/", views.tournament_team_sub_view, name="tournament_team_sub"),
 ]

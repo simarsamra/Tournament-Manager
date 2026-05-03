@@ -270,6 +270,7 @@ class TeamTournamentParticipation(models.Model):
     STATUS_CHOICES = [
         ("pending", "Pending (Forming)"),
         ("active", "Active"),
+        ("waitlisted", "Waitlisted"),
         ("withdrawn", "Withdrawn"),
     ]
 
@@ -430,6 +431,7 @@ class Notification(models.Model):
         ("team_invite_declined", "Team invite declined"),
         ("registration_approved", "Tournament registration approved"),
         ("registration_rejected", "Tournament registration rejected"),
+        ("registration_promoted_from_waitlist", "Registration promoted from waitlist"),
         ("match_result_submitted", "Match result submitted (action required)"),
         ("match_result_confirmed", "Match result confirmed"),
         ("match_result_disputed", "Match result disputed"),
@@ -446,6 +448,7 @@ class Notification(models.Model):
         ("walkover_awarded", "Walkover awarded"),
         ("organizer_announcement", "Organizer announcement"),
         ("organizer_application_result", "Organizer application result"),
+        ("general", "General notification"),
     ]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notifications")
@@ -482,6 +485,7 @@ class TeamMembership(models.Model):
     ROLE_CHOICES = [
         ("captain", "Captain"),
         ("member", "Member"),
+        ("sub", "Substitute"),
     ]
 
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="memberships")

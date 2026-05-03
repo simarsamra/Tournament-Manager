@@ -48,6 +48,7 @@ from .services.enrollment import active_participant_count, is_registration_capac
 
 SEARCH_RESULT_LIMIT = 30
 CRITICAL_STAGE_DISPUTE_WINDOW_HOURS = 12
+DEFAULT_DISPUTE_WINDOW_HOURS = 24
 CRITICAL_STAGE_MATCHES_THRESHOLD = 2
 
 
@@ -919,6 +920,40 @@ def _notify(users, notification_type, message, link="", tournament=None):
         Notification.objects.bulk_create(notifications)
 
 
+def _check_roster_minimum(team):
+    """Warn captain + organizers when a team's roster drops below the minimum (12.3).
+
+    Called after a member leaves or is removed from a team.
+    Returns a list of notifications created.
+    """
+    current_count = team.memberships.count()
+    # Gather all active tournaments this team participates in
+    active_participations = TeamTournamentParticipation.objects.filter(
+        team=team,
+        status__in=["active", "pending"],
+    ).select_related("tournament")
+
+    from django.contrib.auth.models import User as _User
+    for participation in active_participations:
+        tournament = participation.tournament
+        if tournament.status not in ("active", "paused", "registration_open", "ready", "scheduled"):
+            continue
+        min_size = max(1, tournament.players_per_team or 1)
+        if current_count < min_size:
+            captain_user = _User.objects.filter(
+                memberships__team=team, memberships__role="captain"
+            ).first()
+            if captain_user:
+                _notify(
+                    captain_user,
+                    "general",
+                    f"⚠️ Your team '{team.name}' now has {current_count} player(s) but '{tournament.name}' requires {min_size}. "
+                    f"You may be disqualified if the roster is not restored.",
+                    link=f"/team/{team.pk}/",
+                    tournament=tournament,
+                )
+
+
 # -- Auth Views --
 
 def login_view(request):
@@ -1228,19 +1263,23 @@ def create_team_view(request, pk):
         messages.error(request, "You are already registered for this tournament.")
         return redirect("join_tournament", pk=pk)
 
-    if tournament.expected_teams_count:
-        current_count = active_participant_count(tournament)
-        if current_count >= tournament.expected_teams_count:
-            messages.error(
-                request,
-                f"Registration is full. This tournament only allows {tournament.expected_teams_count} {tournament.participant_label_plural.lower()}.",
-            )
-            return redirect("join_tournament", pk=pk)
+    # Determine if registration is full and waitlisting applies
+    _registration_is_full = bool(
+        tournament.expected_teams_count
+        and active_participant_count(tournament) >= tournament.expected_teams_count
+    )
 
     if request.method == "POST":
         form = CreateTeamForm(request.POST, tournament=tournament)
         if form.is_valid():
             if tournament.registration_mode == "individual":
+                # Individuals can't be waitlisted (no multi-player roster logic)
+                if _registration_is_full:
+                    messages.error(
+                        request,
+                        f"Registration is full. This tournament only allows {tournament.expected_teams_count} {tournament.participant_label_plural.lower()}.",
+                    )
+                    return redirect("join_tournament", pk=pk)
                 requested_name = form.cleaned_data.get("participant_name", "")
                 display_name = _resolve_individual_team_name(request.user, requested_name=requested_name)
 
@@ -1281,9 +1320,15 @@ def create_team_view(request, pk):
                 form.add_error("team_name", "A team with that name already exists.")
             else:
                 required = max(1, tournament.players_per_team or 1)
-                # Single-player-per-team tournaments: captain alone completes the team → active
-                # Multi-player: start pending until full roster joins
-                initial_status = "active" if required == 1 else "pending"
+                # If registration full, put team on waitlist (4.7)
+                if _registration_is_full:
+                    initial_status = "waitlisted"
+                elif required == 1:
+                    # Single-player: captain alone completes the team → active
+                    initial_status = "active"
+                else:
+                    # Multi-player: start pending until full roster joins
+                    initial_status = "pending"
                 team = Team.objects.create(
                     name=team_name,
                     department=form.cleaned_data.get("department", "").strip(),
@@ -1297,7 +1342,12 @@ def create_team_view(request, pk):
                     f"Team '{team_name}' created by '{request.user.username}' (status: {initial_status})",
                     tournament=tournament,
                 )
-                if initial_status == "pending":
+                if initial_status == "waitlisted":
+                    messages.success(
+                        request,
+                        f"Team '{team_name}' created! Registration is full — you have been added to the waitlist.",
+                    )
+                elif initial_status == "pending":
                     still_needed = required - 1
                     messages.success(
                         request,
@@ -1326,6 +1376,7 @@ def create_team_view(request, pk):
     return render(request, "core/create_team.html", {
         "form": form,
         "tournament": tournament,
+        "registration_full": _registration_is_full,
         **_tournament_context(request, tournament),
     })
 
@@ -3787,6 +3838,8 @@ def remove_team_member(request, pk, user_pk):
         f"Member '{removed_username}' removed from team '{team.name}' (account preserved)",
         tournament=_get_tournament(request),
     )
+    # 12.3: warn if roster drops below tournament minimum
+    _check_roster_minimum(team)
     messages.success(request, f"Member '{removed_username}' has been removed from the team.")
     return redirect("team_detail", pk=pk)
 
@@ -4811,6 +4864,8 @@ def leave_team_view(request, pk):
         f"User '{request.user.username}' left team '{team.name}'",
         tournament=_get_tournament(request),
     )
+    # 12.3: warn if roster drops below tournament minimum
+    _check_roster_minimum(team)
     messages.success(request, f"You have left '{team.name}'.")
     return redirect("dashboard")
 
@@ -5983,27 +6038,34 @@ def impersonate_user(request, user_pk):
     if target.is_superuser:
         messages.error(request, "Cannot impersonate a superuser.")
         return redirect("settings")
-    request.session["impersonating_original_user_pk"] = request.user.pk
+    # Store original user pk before switching
+    original_pk = request.user.pk
+    request.session["impersonating_original_user_pk"] = original_pk
+    # Also store original auth hash so we can restore it
+    request.session["impersonating_original_hash"] = request.user.get_session_auth_hash()
+    # Switch session to target user
     request.session["_auth_user_id"] = str(target.pk)
     request.session["_auth_user_backend"] = "django.contrib.auth.backends.ModelBackend"
+    request.session["_auth_user_hash"] = target.get_session_auth_hash()
     log_action(request, "impersonation_started", f"Admin '{request.user.username}' impersonating '{target.username}'")
     messages.warning(request, f"You are now impersonating {target.username}. Click 'Stop Impersonating' to return.")
     return redirect("dashboard")
 
 
-@login_required
 def stop_impersonating(request):
-    """Stop impersonation and restore original admin session."""
+    """Stop impersonation and restore original admin session (no login_required — impersonated user may be inactive)."""
     original_pk = request.session.get("impersonating_original_user_pk")
     if not original_pk:
         messages.info(request, "You are not impersonating anyone.")
         return redirect("dashboard")
     original_user = get_object_or_404(User, pk=original_pk)
-    current_username = request.user.username
+    current_username = request.session.get("_auth_user_id", "unknown")
+    original_hash = request.session.pop("impersonating_original_hash", original_user.get_session_auth_hash())
     request.session["_auth_user_id"] = str(original_pk)
     request.session["_auth_user_backend"] = "django.contrib.auth.backends.ModelBackend"
+    request.session["_auth_user_hash"] = original_hash
     del request.session["impersonating_original_user_pk"]
-    log_action(request, "impersonation_ended", f"Admin '{original_user.username}' stopped impersonating '{current_username}'")
+    log_action(request, "impersonation_ended", f"Admin '{original_user.username}' stopped impersonating user pk={current_username}")
     messages.success(request, "Impersonation ended.")
     return redirect("settings")
 
@@ -6116,5 +6178,88 @@ def seed_participants_view(request, pk):
         "tournament": tournament,
         "participants": participants,
         "is_individual": tournament.registration_mode == "individual",
+        **_tournament_context(request, tournament),
+    })
+
+
+# =============================================================================
+# FLOW 7.3 — Add substitute player to team tournament roster
+# =============================================================================
+
+@login_required
+def tournament_team_sub_view(request, pk, participation_pk):
+    """Organizer can add a substitute player to a team's tournament roster (7.3).
+
+    A substitute is added as a 'sub' TeamMembership, which allows them to
+    participate in this tournament's matches without being a permanent member.
+    """
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can manage substitutes.")
+        return redirect("dashboard")
+
+    tournament = get_object_or_404(Tournament, pk=pk)
+    participation = get_object_or_404(TeamTournamentParticipation, pk=participation_pk, tournament=tournament)
+    team = participation.team
+
+    current_subs = TeamMembership.objects.filter(team=team, role="sub").select_related("user")
+
+    if request.method == "POST":
+        action = request.POST.get("action", "add")
+
+        if action == "remove":
+            sub_pk = request.POST.get("sub_pk")
+            if sub_pk:
+                sub_membership = TeamMembership.objects.filter(
+                    pk=sub_pk, team=team, role="sub"
+                ).first()
+                if sub_membership:
+                    username = sub_membership.user.username
+                    sub_membership.delete()
+                    log_action(
+                        request,
+                        "sub_removed",
+                        f"Sub '{username}' removed from team '{team.name}' for '{tournament.name}'",
+                        tournament=tournament,
+                    )
+                    messages.success(request, f"Substitute '{username}' removed.")
+            return redirect("tournament_team_sub", pk=pk, participation_pk=participation_pk)
+
+        # action == "add"
+        username = request.POST.get("username", "").strip()
+        if not username:
+            messages.error(request, "Please enter a username.")
+        else:
+            try:
+                target_user = User.objects.get(username__iexact=username, is_active=True)
+            except User.DoesNotExist:
+                messages.error(request, f"User '{username}' not found.")
+                target_user = None
+
+            if target_user:
+                if TeamMembership.objects.filter(team=team, user=target_user).exists():
+                    messages.error(request, f"'{username}' is already on this team.")
+                else:
+                    TeamMembership.objects.create(team=team, user=target_user, role="sub")
+                    log_action(
+                        request,
+                        "sub_added",
+                        f"Sub '{username}' added to team '{team.name}' for '{tournament.name}'",
+                        tournament=tournament,
+                    )
+                    _notify(
+                        target_user,
+                        "general",
+                        f"You have been added as a substitute for '{team.name}' in the tournament '{tournament.name}'.",
+                        link=f"/team/{team.pk}/",
+                        tournament=tournament,
+                    )
+                    messages.success(request, f"'{username}' added as a substitute.")
+        return redirect("tournament_team_sub", pk=pk, participation_pk=participation_pk)
+
+    return render(request, "core/tournament_team_sub.html", {
+        "tournament": tournament,
+        "team": team,
+        "participation": participation,
+        "current_subs": current_subs,
         **_tournament_context(request, tournament),
     })

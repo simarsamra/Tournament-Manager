@@ -91,6 +91,7 @@
                         <button type="submit" class="btn btn-outline btn-sm" style="color:var(--danger,#e74c3c);">🚫 Disqualify</button>
                     </form>
                     {% endif %}
+                    <a href="{% url 'tournament_team_sub' pk=tournament.pk participation_pk=p.pk %}" class="btn btn-outline btn-sm">👥 Subs</a>
                 </td>
             </tr>
             {% endfor %}
