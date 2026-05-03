@@ -609,15 +609,43 @@ def _build_slots(tournament, courts):
             current_date = range_start
             while current_date <= range_end:
                 if current_date.weekday() == availability.weekday:
-                    slot_start = timezone.make_aware(datetime.combine(current_date, availability.start_time))
-                    slot_limit = timezone.make_aware(datetime.combine(current_date, availability.end_time))
-                    current = slot_start
-                    while current + duration <= slot_limit:
-                        slot_key = (current, availability.court_id)
-                        if slot_key not in seen:
-                            slots.append((current, current + duration, availability.court))
-                            seen.add(slot_key)
-                        current += duration
+                    if availability.additional_start_times:
+                        explicit_times = [availability.start_time]
+                        for part in availability.additional_start_times.split(","):
+                            part = part.strip()
+                            if not part:
+                                continue
+                            try:
+                                explicit_times.append(datetime.strptime(part, "%H:%M").time())
+                            except ValueError:
+                                continue
+                        explicit_times = sorted(set(explicit_times))
+                        for start_time in explicit_times:
+                            slot_start = timezone.make_aware(datetime.combine(current_date, start_time))
+                            slot_end = slot_start + duration
+                            if slot_end.date() != current_date:
+                                continue
+                            slot_key = (slot_start, availability.court_id)
+                            if slot_key not in seen:
+                                slots.append((slot_start, slot_end, availability.court))
+                                seen.add(slot_key)
+                    else:
+                        slot_start = timezone.make_aware(datetime.combine(current_date, availability.start_time))
+                        slot_limit = timezone.make_aware(datetime.combine(current_date, availability.end_time))
+                        current = slot_start
+                        duration_minutes = duration.total_seconds() / 60
+                        max_daily_slots = int((slot_limit - slot_start).total_seconds() / 60 // duration_minutes)
+                        slots_to_allocate = max_daily_slots
+                        if availability.matches_per_court_per_day and availability.matches_per_court_per_day < max_daily_slots:
+                            slots_to_allocate = availability.matches_per_court_per_day
+                        slot_count = 0
+                        while current + duration <= slot_limit and slot_count < slots_to_allocate:
+                            slot_key = (current, availability.court_id)
+                            if slot_key not in seen:
+                                slots.append((current, current + duration, availability.court))
+                                seen.add(slot_key)
+                                slot_count += 1
+                            current += duration
                 current_date += timedelta(days=1)
         return sorted(slots, key=lambda item: (item[0], item[2].id))
 

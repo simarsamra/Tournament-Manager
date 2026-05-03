@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django import forms
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -111,8 +113,23 @@ class CourtAvailabilityForm(forms.Form):
         error_messages={"required": "Select at least one weekday."},
         help_text="Choose every day that should reuse this time range.",
     )
-    start_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
-    end_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}))
+    matches_per_court_per_day = forms.IntegerField(
+        min_value=1,
+        initial=1,
+        widget=forms.NumberInput(attrs={"class": "form-control"}),
+        help_text="How many matches should be scheduled on each selected court on each chosen weekday.",
+    )
+    start_time = forms.TimeField(widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}), help_text="Time for the first match on each selected day.")
+    additional_start_times = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={"class": "form-control", "placeholder": "13:00, 15:30"}),
+        help_text="Optional list of additional match start times after the first match, comma-separated.",
+    )
+    end_time = forms.TimeField(
+        required=False,
+        widget=forms.TimeInput(attrs={"class": "form-control", "type": "time"}),
+        help_text="Optional: leave blank to infer the end time from the selected match count.",
+    )
     start_date = forms.DateField(
         required=False,
         widget=forms.DateInput(attrs={"class": "form-control", "type": "date"}),
@@ -136,12 +153,43 @@ class CourtAvailabilityForm(forms.Form):
         cleaned = super().clean()
         start = cleaned.get("start_time")
         end = cleaned.get("end_time")
+        additional = cleaned.get("additional_start_times")
         start_date = cleaned.get("start_date")
         end_date = cleaned.get("end_date")
+
         if start and end and end <= start:
             raise forms.ValidationError("End time must be after start time.")
         if start_date and end_date and end_date < start_date:
             raise forms.ValidationError("End date cannot be before start date.")
+
+        parsed_times = []
+        if additional:
+            parts = [part.strip() for part in additional.split(",") if part.strip()]
+            seen = set()
+            for part in parts:
+                try:
+                    parsed = datetime.strptime(part, "%H:%M").time()
+                except ValueError:
+                    raise forms.ValidationError(
+                        "Additional start times must be valid times in HH:MM format, comma-separated."
+                    )
+                if start and parsed <= start:
+                    raise forms.ValidationError(
+                        "Additional start times must be after the first match start time."
+                    )
+                if parsed in seen:
+                    raise forms.ValidationError("Duplicate additional start times are not allowed.")
+                seen.add(parsed)
+                parsed_times.append(parsed)
+
+            parsed_times.sort()
+            cleaned["additional_start_times"] = ", ".join(t.strftime("%H:%M") for t in parsed_times)
+            cleaned["additional_start_times_list"] = parsed_times
+            cleaned["matches_per_court_per_day"] = 1 + len(parsed_times)
+
+        if additional and not start:
+            raise forms.ValidationError("First match start time is required when additional start times are provided.")
+
         return cleaned
 
 

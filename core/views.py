@@ -1,5 +1,6 @@
 """Core views for tournament management."""
 import json
+import math
 import os
 import random
 from collections import defaultdict
@@ -758,7 +759,11 @@ def _validate_tournament_ready(tournament):
         available_slots = count_available_slots(tournament)
         if required_matches and available_slots < required_matches:
             errors.append(
-                f"Not enough court availability to schedule this tournament ({available_slots} available slots for about {required_matches} matches)."
+                f"Not enough court availability to schedule this tournament "
+                f"({available_slots} available slot{'' if available_slots == 1 else 's'} for about {required_matches} matches). "
+                f"Check that your court availability entries have a wide enough date range — "
+                f"if an availability record has an 'End Date' set, it limits recurring slots to only those weekdays that fall before that date. "
+                f"Remove the end date (leave it blank) to make availability open-ended."
             )
 
     return errors
@@ -1146,6 +1151,20 @@ def create_team_view(request, pk):
     if _is_user_enrolled_in_tournament(request.user, tournament):
         messages.error(request, "You are already registered for this tournament.")
         return redirect("join_tournament", pk=pk)
+
+    if tournament.expected_teams_count:
+        if tournament.registration_mode == "individual":
+            current_count = tournament.individual_registrations.filter(status="active").count()
+        else:
+            current_count = TeamTournamentParticipation.objects.filter(
+                tournament=tournament, status="active", team__is_internal=False
+            ).count()
+        if current_count >= tournament.expected_teams_count:
+            messages.error(
+                request,
+                f"Registration is full ({current_count}/{tournament.expected_teams_count}).",
+            )
+            return redirect("join_tournament", pk=pk)
 
     if request.method == "POST":
         form = CreateTeamForm(request.POST, tournament=tournament)
@@ -1640,6 +1659,14 @@ def tournament_config(request, pk):
         ko_tbd = tournament.matches.filter(team1__isnull=True, team2__isnull=True, group="").exists()
         show_proceed_knockout = group_qs.exists() and not pending.exists() and ko_tbd
 
+    available_slots = count_available_slots(tournament)
+    active_count = (
+        tournament.individual_registrations.filter(status="active").count()
+        if tournament.registration_mode == "individual"
+        else TeamTournamentParticipation.objects.filter(tournament=tournament, status="active", team__is_internal=False).count()
+    )
+    required_matches = estimate_required_matches(tournament, team_count=active_count)
+
     return render(request, "core/tournament_config.html", {
         "tournament": tournament,
         "courts": tournament.courts.all(),
@@ -1652,6 +1679,8 @@ def tournament_config(request, pk):
         "bulk_team_form": BulkTeamForm(),
         "bulk_team_file_form": BulkTeamFileForm(),
         "show_proceed_knockout": show_proceed_knockout,
+        "available_slots": available_slots,
+        "required_matches": required_matches,
         **_tournament_context(request, tournament),
     })
 
@@ -1706,6 +1735,153 @@ def add_court(request, pk):
 
 @login_required
 @require_POST
+def delete_court_availability(request, pk, availability_pk):
+    """Organiser deletes a single court availability record."""
+    if not _is_organizer(request.user):
+        return redirect("dashboard")
+    tournament = get_object_or_404(Tournament, pk=pk)
+    availability = get_object_or_404(CourtAvailability, pk=availability_pk, court__tournament=tournament)
+    label = str(availability)
+    availability.delete()
+    log_action(request, "court_availability_deleted", f"Deleted availability: {label}", tournament=tournament)
+    messages.success(request, f"Availability '{label}' removed.")
+    return redirect("tournament_config", pk=pk)
+
+
+def _calculate_daily_slots(start_time, end_time, duration_minutes):
+    total_minutes = (datetime.combine(datetime.min, end_time) - datetime.combine(datetime.min, start_time)).total_seconds() / 60
+    if total_minutes <= 0:
+        return 0
+    return int(total_minutes // duration_minutes)
+
+
+def _infer_end_time(start_time, matches_per_court_per_day, duration_minutes):
+    start_dt = datetime.combine(datetime.min, start_time)
+    end_dt = start_dt + timedelta(minutes=matches_per_court_per_day * duration_minutes)
+    return end_dt.time() if end_dt.date() == start_dt.date() else None
+
+
+def _parse_match_slots_from_request(request, duration_minutes):
+    starts = request.POST.getlist("match_start")
+    ends = request.POST.getlist("match_end")
+    if not starts and not ends:
+        return None, None
+
+    if len(starts) != len(ends):
+        return None, "Number of start and end times must match."
+
+    slots = []
+    last_end = None
+    for idx, (start_str, end_str) in enumerate(zip(starts, ends), start=1):
+        start_str = start_str.strip()
+        end_str = end_str.strip()
+        if not start_str or not end_str:
+            return None, f"Match {idx} requires both start and end times."
+        try:
+            start_time = datetime.strptime(start_str, "%H:%M").time()
+            end_time = datetime.strptime(end_str, "%H:%M").time()
+        except ValueError:
+            return None, f"Match {idx} times must be in HH:MM format."
+        if end_time <= start_time:
+            return None, f"Match {idx} end time must be after its start time."
+        duration = (datetime.combine(datetime.min, end_time) - datetime.combine(datetime.min, start_time)).total_seconds() / 60
+        if round(duration) != duration_minutes:
+            return None, f"Match {idx} must be exactly {duration_minutes} minutes long."
+        if last_end and start_time <= last_end:
+            return None, f"Match {idx} must start after the previous match ends."
+        slots.append((start_time, end_time))
+        last_end = end_time
+
+    return slots, None
+
+
+def _estimate_availability_end_date(start_date, weekdays, daily_slots, required_matches, max_days=365 * 2):
+    remaining = required_matches
+    current = start_date
+    while remaining > 0 and (current - start_date).days <= max_days:
+        if current.weekday() in weekdays:
+            remaining -= daily_slots
+            if remaining <= 0:
+                return current
+        current += timedelta(days=1)
+    return None
+
+
+@login_required
+@require_POST
+def estimate_court_availability_end_date(request, pk):
+    if not _is_organizer(request.user):
+        return JsonResponse({"status": "error", "message": "Not authorized."}, status=403)
+    tournament = get_object_or_404(Tournament, pk=pk)
+    form = CourtAvailabilityForm(request.POST, tournament=tournament)
+    if not form.is_valid():
+        error_message = "Please correct the availability details and try again."
+        return JsonResponse({"status": "error", "message": error_message, "errors": form.errors}, status=400)
+
+    courts = list(form.cleaned_data["courts"])
+    weekdays = [int(day) for day in form.cleaned_data["weekdays"]]
+    start_time = form.cleaned_data["start_time"]
+    matches_per_court_per_day = form.cleaned_data.get("matches_per_court_per_day")
+    start_date = form.cleaned_data.get("start_date") or tournament.start_date or timezone.localdate()
+    if not courts:
+        return JsonResponse({"status": "error", "message": "Select at least one court."}, status=400)
+    if not weekdays:
+        return JsonResponse({"status": "error", "message": "Select at least one weekday."}, status=400)
+
+    duration = max(1, tournament.default_match_duration or 35)
+    match_slots, parse_error = _parse_match_slots_from_request(request, duration)
+    if parse_error:
+        return JsonResponse({"status": "error", "message": parse_error}, status=400)
+    if match_slots is not None:
+        daily_slots_per_court = len(match_slots)
+    else:
+        inferred_end_time = _infer_end_time(start_time, matches_per_court_per_day, duration)
+        if inferred_end_time is None:
+            return JsonResponse({"status": "error", "message": "The selected number of matches does not fit in a single day from the chosen start time."}, status=400)
+        daily_slots_per_court = matches_per_court_per_day
+
+    active_count = (
+        tournament.individual_registrations.filter(status="active").count()
+        if tournament.registration_mode == "individual"
+        else TeamTournamentParticipation.objects.filter(
+            tournament=tournament,
+            status="active",
+            team__is_internal=False,
+        ).count()
+    )
+    team_count = active_count or tournament.expected_teams_count or 0
+    if team_count < 2:
+        return JsonResponse({"status": "error", "message": "Need at least 2 participants or teams in the tournament to estimate an end date. Add entries or set the expected count."}, status=400)
+
+    required_matches = estimate_required_matches(tournament, team_count=team_count)
+    weekly_slots = daily_slots_per_court * len(courts) * len(weekdays)
+    if weekly_slots <= 0:
+        return JsonResponse({"status": "error", "message": "The selected schedule does not produce any available slots."}, status=400)
+
+    estimated_end_date = _estimate_availability_end_date(start_date, weekdays, daily_slots_per_court * len(courts), required_matches)
+    if not estimated_end_date:
+        return JsonResponse({"status": "error", "message": "Could not estimate an end date from the selected availability. Try a longer daily window or more weekdays."}, status=400)
+
+    weeks_needed = math.ceil(required_matches / max(1, weekly_slots))
+    message = (
+        f"Estimated end date: {estimated_end_date} — {required_matches} match{'' if required_matches == 1 else 'es'} requires about {weeks_needed} week{'' if weeks_needed == 1 else 's'} of selected availability. "
+        f"Using {daily_slots_per_court} slot{'' if daily_slots_per_court == 1 else 's'} per court per day across {len(courts)} court{'' if len(courts) == 1 else 's'} and {len(weekdays)} weekday{'' if len(weekdays) == 1 else 's'}."
+    )
+    if active_count == 0 and tournament.expected_teams_count:
+        message += f" Using expected count of {tournament.expected_teams_count}."
+
+    return JsonResponse({
+        "status": "ok",
+        "message": message,
+        "estimated_end_date": str(estimated_end_date),
+        "required_matches": required_matches,
+        "weekly_slots": weekly_slots,
+        "daily_slots_per_court": daily_slots_per_court,
+    })
+
+
+@login_required
+@require_POST
 def add_court_availability(request, pk):
     if not _is_organizer(request.user):
         return redirect("dashboard")
@@ -1715,10 +1891,33 @@ def add_court_availability(request, pk):
         courts = list(form.cleaned_data["courts"])
         weekdays = [int(day) for day in form.cleaned_data["weekdays"]]
         start_time = form.cleaned_data["start_time"]
-        end_time = form.cleaned_data["end_time"]
+        end_time = form.cleaned_data.get("end_time")
         start_date = form.cleaned_data.get("start_date")
         end_date = form.cleaned_data.get("end_date")
+        additional_start_times = form.cleaned_data.get("additional_start_times")
         is_active = form.cleaned_data.get("is_active", False)
+        duration = max(1, tournament.default_match_duration or 35)
+        match_slots, parse_error = _parse_match_slots_from_request(request, duration)
+        if parse_error:
+            messages.error(request, parse_error)
+            return redirect("tournament_config", pk=pk)
+
+        if match_slots is not None:
+            start_time = match_slots[0][0]
+            additional_start_times = ", ".join(slot[0].strftime("%H:%M") for slot in match_slots[1:])
+            end_time = match_slots[-1][1]
+            matches_per_court_per_day = len(match_slots)
+        else:
+            matches_per_court_per_day = form.cleaned_data.get("matches_per_court_per_day", 1)
+            if end_time is None:
+                inferred = _infer_end_time(start_time, matches_per_court_per_day, duration)
+                if inferred is None:
+                    messages.error(
+                        request,
+                        "The selected number of matches does not fit in a single day from the chosen start time."
+                    )
+                    return redirect("tournament_config", pk=pk)
+                end_time = inferred
 
         existing_keys = set(
             CourtAvailability.objects.filter(
@@ -1746,6 +1945,8 @@ def add_court_availability(request, pk):
                     end_time=end_time,
                     start_date=start_date,
                     end_date=end_date,
+                    additional_start_times=additional_start_times or "",
+                    matches_per_court_per_day=matches_per_court_per_day,
                     is_active=is_active,
                 ))
                 existing_keys.add(key)
@@ -1892,6 +2093,33 @@ def add_teams_bulk(request, pk):
     else:
         messages.warning(request, "No valid team data found.")
 
+    return redirect("tournament_config", pk=pk)
+
+
+@login_required
+@require_POST
+def remove_team_from_tournament(request, pk, participation_pk):
+    """Organiser removes a team/individual registration from a tournament."""
+    if not _is_organizer(request.user):
+        return redirect("dashboard")
+    tournament = get_object_or_404(Tournament, pk=pk)
+    participation = get_object_or_404(TeamTournamentParticipation, pk=participation_pk, tournament=tournament)
+    team_name = participation.team.name
+
+    # For individual-mode tournaments, also remove the corresponding individual registration
+    if tournament.registration_mode == "individual" and participation.team.is_internal:
+        TournamentIndividualRegistration.objects.filter(
+            shadow_team=participation.team, tournament=tournament
+        ).delete()
+
+    participation.delete()
+    log_action(
+        request,
+        "team_removed_from_tournament",
+        f"Removed '{team_name}' from '{tournament.name}'",
+        tournament=tournament,
+    )
+    messages.success(request, f"'{team_name}' has been removed from the tournament.")
     return redirect("tournament_config", pk=pk)
 
 
@@ -4176,6 +4404,17 @@ def enter_existing_team_view(request, pk):
             f"(currently {member_count}).",
         )
         return redirect("join_tournament", pk=pk)
+
+    if tournament.expected_teams_count:
+        current_count = TeamTournamentParticipation.objects.filter(
+            tournament=tournament, status="active", team__is_internal=False
+        ).count()
+        if current_count >= tournament.expected_teams_count:
+            messages.error(
+                request,
+                f"Registration is full ({current_count}/{tournament.expected_teams_count}).",
+            )
+            return redirect("join_tournament", pk=pk)
 
     TeamTournamentParticipation.objects.create(team=team, tournament=tournament, status="active")
     log_action(

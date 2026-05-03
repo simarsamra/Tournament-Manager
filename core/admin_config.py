@@ -20,7 +20,17 @@ class CourtAdmin(admin.ModelAdmin):
 
 @admin.register(CourtAvailability)
 class CourtAvailabilityAdmin(admin.ModelAdmin):
-    list_display = ["court", "weekday", "start_time", "end_time", "start_date", "end_date", "is_active"]
+    list_display = [
+        "court",
+        "weekday",
+        "matches_per_court_per_day",
+        "additional_start_times",
+        "start_time",
+        "end_time",
+        "start_date",
+        "end_date",
+        "is_active",
+    ]
     list_filter = ["weekday", "is_active", "court__tournament"]
 
 

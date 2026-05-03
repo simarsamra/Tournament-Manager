@@ -21,7 +21,7 @@ from .models import (
     TeamTournamentCourtPreference,
     TournamentIndividualRegistration,
 )
-from .scheduling import generate_fixtures
+from .scheduling import generate_fixtures, count_available_slots
 from .standings import calculate_standings, advance_winner
 from .withdrawals import handle_withdrawal
 from .forms import TournamentForm
@@ -162,6 +162,80 @@ class UXAndLogicRegressionTests(TestCase):
 		self.assertEqual(CourtAvailability.objects.filter(court__tournament=tournament).count(), 4)
 		duplicate_messages = [str(m) for m in duplicate_response.context["messages"]]
 		self.assertTrue(any("skipped" in m.lower() for m in duplicate_messages))
+
+	def test_add_court_availability_stores_matches_per_court_per_day(self):
+		tournament = self._create_tournament(name="Matches Per Day")
+		court = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			{
+				"courts": [str(court.pk)],
+				"weekdays": ["0"],
+				"start_time": "09:00",
+				"end_time": "12:00",
+				"start_date": "2026-05-01",
+				"matches_per_court_per_day": "2",
+				"is_active": "on",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		availability = CourtAvailability.objects.get(court=court)
+		self.assertEqual(availability.matches_per_court_per_day, 2)
+
+	def test_add_court_availability_supports_additional_start_times(self):
+		tournament = self._create_tournament(name="Explicit Times")
+		court = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("add_court_availability", kwargs={"pk": tournament.pk}),
+			{
+				"courts": [str(court.pk)],
+				"weekdays": ["0"],
+				"start_time": "10:00",
+				"additional_start_times": "13:00",
+				"start_date": "2026-05-04",
+				"end_date": "2026-05-04",
+				"matches_per_court_per_day": "2",
+				"is_active": "on",
+			},
+			follow=True,
+		)
+
+		self.assertEqual(response.status_code, 200)
+		availability = CourtAvailability.objects.get(court=court)
+		self.assertEqual(availability.additional_start_times, "13:00")
+		self.assertEqual(availability.matches_per_court_per_day, 2)
+		self.assertEqual(count_available_slots(tournament), 2)
+
+	def test_estimate_court_availability_end_date_uses_matches_per_court_per_day(self):
+		tournament = self._create_tournament(name="Estimate Matches Per Day")
+		tournament.expected_teams_count = 4
+		tournament.save(update_fields=["expected_teams_count"])
+		court = Court.objects.create(tournament=tournament, name="Court A", is_available=True)
+		self.client.force_login(self.organizer)
+
+		response = self.client.post(
+			reverse("estimate_court_availability_end_date", kwargs={"pk": tournament.pk}),
+			{
+				"courts": [str(court.pk)],
+				"weekdays": ["0", "2"],
+				"start_time": "09:00",
+				"end_time": "14:00",
+				"start_date": "2026-05-01",
+				"matches_per_court_per_day": "2",
+			},
+		)
+
+		self.assertEqual(response.status_code, 200)
+		json_data = response.json()
+		self.assertEqual(json_data["status"], "ok")
+		self.assertIn("Estimated end date", json_data["message"])
+		self.assertIn("per court per day", json_data["message"])
 
 	def test_team_membership_supports_manager_role(self):
 		tournament = self._create_tournament(name="Role Model")

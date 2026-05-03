@@ -1,4 +1,6 @@
 import json
+from datetime import date, datetime, timedelta
+
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -164,14 +166,62 @@ class CourtAvailability(models.Model):
     end_time = models.TimeField()
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
+    additional_start_times = models.TextField(
+        blank=True,
+        default="",
+        help_text="Comma-separated additional match start times after the first match, e.g. 13:00, 15:30.",
+    )
+    matches_per_court_per_day = models.PositiveIntegerField(
+        default=1,
+        help_text="How many matches should be scheduled on each court for each selected weekday.",
+    )
     is_active = models.BooleanField(default=True)
 
     class Meta:
         ordering = ["court__name", "weekday", "start_time"]
 
+    def get_additional_start_times(self):
+        times = []
+        if not self.additional_start_times:
+            return times
+
+        for part in self.additional_start_times.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                times.append(datetime.strptime(part, "%H:%M").time())
+            except ValueError:
+                continue
+        return sorted(set(times))
+
+    @property
+    def match_start_times(self):
+        return [self.start_time] + self.get_additional_start_times()
+
+    @property
+    def match_intervals(self):
+        duration = self.court.tournament.default_match_duration or 35
+        intervals = []
+        for start_time in self.match_start_times:
+            start_dt = datetime.combine(date.today(), start_time)
+            end_dt = start_dt + timedelta(minutes=duration)
+            if end_dt.date() != start_dt.date():
+                continue
+            intervals.append((start_time, end_dt.time()))
+        return intervals
+
+    @property
+    def match_time_summary(self):
+        if not self.match_intervals:
+            return f"{self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
+        return ", ".join(
+            f"{start.strftime('%H:%M')}-{end.strftime('%H:%M')}" for start, end in self.match_intervals
+        )
+
     def __str__(self):
         day = dict(self.WEEKDAY_CHOICES).get(self.weekday, self.weekday)
-        return f"{self.court.name}: {day} {self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
+        return f"{self.court.name}: {day} {self.match_time_summary}"
 
 
 class Team(models.Model):
