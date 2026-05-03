@@ -35,6 +35,62 @@ Tournament Manager is a Django web app for running sports tournaments (table ten
 	- Withdrawal uses the configured withdrawal policy (forfeit or void).
 - Completed tournaments do not allow withdrawals.
 
+## Database Setup
+
+Tournament Manager uses **PostgreSQL** as its database backend.
+
+### Install PostgreSQL
+
+- **macOS**: `brew install postgresql` then `brew services start postgresql`
+- **Ubuntu/Debian**: `sudo apt install postgresql postgresql-contrib`
+- **Windows**: Download from https://www.postgresql.org/download/windows/
+
+### Create the database
+
+```bash
+createdb tournament_manager
+```
+
+Or using `psql`:
+
+```sql
+CREATE DATABASE tournament_manager;
+```
+
+### Configure environment variables
+
+Copy the example environment file and fill in your credentials:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your PostgreSQL connection details:
+
+```
+DB_NAME=tournament_manager
+DB_USER=postgres
+DB_PASSWORD=your_password
+DB_HOST=localhost
+DB_PORT=5432
+```
+
+Set the variables in your shell (or use a tool like [`python-dotenv`](https://pypi.org/project/python-dotenv/) or your platform's env management) before running the app.
+
+### Migrate existing SQLite data (optional)
+
+If you have data in an existing `db.sqlite3` that you want to preserve:
+
+```bash
+# 1. Export data from SQLite
+python manage.py dumpdata --natural-foreign --natural-primary \
+    -e contenttypes -e auth.Permission > data.json
+
+# 2. Point DATABASES at PostgreSQL (set DB_* env vars), then:
+python manage.py migrate
+python manage.py loaddata data.json
+```
+
 ## Quick Start
 
 ### 1. Create and activate a virtual environment
@@ -103,10 +159,10 @@ python manage.py runserver 0.0.0.0:8000
 
 ## Tech Stack
 
-- Backend: Django + SQLite
+- Backend: Django + PostgreSQL
 - Frontend: Django templates + static CSS/JS
 - Authentication: Django auth and sessions
-- Data storage: db.sqlite3
+- Data storage: PostgreSQL database
 - Backups: JSON files in backups
 
 ## Project Layout
