@@ -5892,18 +5892,20 @@ def user_search_view(request):
     q = request.GET.get("q", "").strip()
     results = []
     if q:
-        from django.db.models import Count, OuterRef, Subquery
+        from django.db.models import Count, Prefetch
         qs = User.objects.filter(
             Q(username__icontains=q) | Q(email__icontains=q) | Q(first_name__icontains=q),
             is_superuser=False,
             is_active=True,
         ).annotate(
             participation_count=Count("memberships__team__participations", distinct=True),
-        ).prefetch_related("memberships__team")[:SEARCH_RESULT_LIMIT]
+        ).prefetch_related(
+            Prefetch("memberships", queryset=TeamMembership.objects.order_by("joined_at").select_related("team"))
+        )[:SEARCH_RESULT_LIMIT]
         for u in qs:
-            # Get first team from prefetched memberships (avoid extra query)
-            memberships = sorted(u.memberships.all(), key=lambda m: m.joined_at)
-            team = memberships[0].team if memberships else None
+            # Get first team from prefetched memberships (ordering done at DB level)
+            first_membership = next(iter(u.memberships.all()), None)
+            team = first_membership.team if first_membership else None
             results.append({
                 "username": u.username,
                 "display_name": u.get_full_name() or u.username,
@@ -6066,9 +6068,12 @@ def impersonate_user(request, user_pk):
     # Store original user pk before switching
     original_pk = request.user.pk
     request.session["impersonating_original_user_pk"] = original_pk
-    # Also store original auth hash so we can restore it
+    # Store the original admin's session auth hash so we can restore it exactly.
+    # Without this, if the admin's password changes during the impersonation session,
+    # Django would invalidate the session when we try to restore it (HASH_SESSION_KEY
+    # must match get_session_auth_hash() for the session to remain valid).
     request.session["impersonating_original_hash"] = request.user.get_session_auth_hash()
-    # Switch session to target user
+    # Switch session to target user (manually update Django's internal session keys)
     request.session["_auth_user_id"] = str(target.pk)
     request.session["_auth_user_backend"] = "django.contrib.auth.backends.ModelBackend"
     request.session["_auth_user_hash"] = target.get_session_auth_hash()
