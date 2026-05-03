@@ -5140,7 +5140,7 @@ def team_invite_view(request, pk):
                 target_user,
                 "team_invite_received",
                 f"You have been invited to join {team.name} by {request.user.username}.",
-                link=f"/teams/{team.pk}/invites/",
+                link="/teams/my-invites/",
             )
             log_action(request, "team_invite_sent", f"Invite sent to '{username}' for team '{team.name}'")
             messages.success(request, f"Invite sent to {username}.")

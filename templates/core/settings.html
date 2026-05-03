@@ -56,7 +56,7 @@
                 <button type="submit" class="btn btn-primary">▶ Resume Tournament</button>
             </form>
             {% endif %}
-            {% if tournament.status not in 'completed,cancelled' %}
+            {% if tournament.status != 'completed' and tournament.status != 'cancelled' %}
             <form method="post" action="{% url 'cancel_tournament' pk=tournament.pk %}"
                   onsubmit="return confirm('Cancel this tournament? All participants will be notified.');">
                 {% csrf_token %}

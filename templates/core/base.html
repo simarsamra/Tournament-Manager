@@ -39,7 +39,7 @@
                 <span style="font-size:0.7rem;background:var(--primary);color:#fff;border-radius:10px;padding:1px 7px;margin-left:0.3rem;vertical-align:middle;">{{ open_registration_tournaments|length }}</span>
             </a>
             {% endif %}
-            {% if not user.organizer_profile.verified %}
+            {% if not user.organizer_profile.verified and not user.is_staff %}
             <a href="{% url 'organizer_apply' %}" class="{% if request.resolver_match.url_name == 'organizer_apply' %}active{% endif %}">📝 Apply as Organizer</a>
             {% endif %}
             {% endif %}
