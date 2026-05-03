@@ -3124,7 +3124,9 @@ def submit_score(request, pk):
     if match.tournament.status == "paused" and not is_organizer:
         messages.error(request, "The tournament is currently paused. Score submission is not allowed.")
         return redirect("match_detail", pk=pk)
-    if match.tournament.status not in ("active", "paused"):
+    # Organizers can submit scores in both active and paused; participants only when active
+    allowed_tournament_statuses = ("active", "paused") if is_organizer else ("active",)
+    if match.tournament.status not in allowed_tournament_statuses:
         messages.error(request, "Scores can only be submitted once the tournament has started.")
         return redirect("match_detail", pk=pk)
     if match.tournament.status == "completed":
@@ -5890,22 +5892,23 @@ def user_search_view(request):
     q = request.GET.get("q", "").strip()
     results = []
     if q:
+        from django.db.models import Count, OuterRef, Subquery
         qs = User.objects.filter(
             Q(username__icontains=q) | Q(email__icontains=q) | Q(first_name__icontains=q),
             is_superuser=False,
             is_active=True,
-        )[:SEARCH_RESULT_LIMIT]
+        ).annotate(
+            participation_count=Count("memberships__team__participations", distinct=True),
+        ).prefetch_related("memberships__team")[:SEARCH_RESULT_LIMIT]
         for u in qs:
-            membership = TeamMembership.objects.filter(user=u).order_by("joined_at").first()
-            team = membership.team if membership else None
-            participation_count = TeamTournamentParticipation.objects.filter(
-                team__memberships__user=u
-            ).distinct().count()
+            # Get first team from prefetched memberships (avoid extra query)
+            memberships = sorted(u.memberships.all(), key=lambda m: m.joined_at)
+            team = memberships[0].team if memberships else None
             results.append({
                 "username": u.username,
                 "display_name": u.get_full_name() or u.username,
                 "team_name": team.name if team else None,
-                "participation_count": participation_count,
+                "participation_count": u.participation_count,
             })
 
     want_json = (
@@ -5933,17 +5936,24 @@ def team_search_view(request):
     q = request.GET.get("q", "").strip()
     results = []
     if q:
-        qs = Team.objects.filter(name__icontains=q, status="active")[:SEARCH_RESULT_LIMIT]
+        from django.db.models import Count
+        qs = (
+            Team.objects.filter(name__icontains=q, status="active")
+            .annotate(
+                member_count=Count("memberships", distinct=True),
+                active_tournament_count=Count(
+                    "participations",
+                    filter=db_models.Q(participations__status="active"),
+                    distinct=True,
+                ),
+            )[:SEARCH_RESULT_LIMIT]
+        )
         for t in qs:
-            member_count = t.memberships.count()
-            active_tournament_count = TeamTournamentParticipation.objects.filter(
-                team=t, status="active"
-            ).count()
             results.append({
                 "pk": t.pk,
                 "name": t.name,
-                "member_count": member_count,
-                "active_tournament_count": active_tournament_count,
+                "member_count": t.member_count,
+                "active_tournament_count": t.active_tournament_count,
             })
 
     want_json = (
@@ -5967,6 +5977,7 @@ def team_search_view(request):
 
 def organizer_public_page(request, pk):
     """Public profile page for a verified organizer (9.4)."""
+    from .models import AuditLog as _AuditLog
     organizer = get_object_or_404(User, pk=pk)
     try:
         profile = organizer.organizer_profile
@@ -5979,7 +5990,21 @@ def organizer_public_page(request, pk):
             raise Http404
         profile = None
 
-    tournaments = Tournament.objects.all().order_by("-created_at")
+    # Find tournaments created by this organizer via AuditLog entries for 'tournament_created'
+    created_tournament_pks = _AuditLog.objects.filter(
+        user=organizer, action="tournament_created"
+    ).values_list("tournament_id", flat=True).distinct()
+
+    if created_tournament_pks.exists():
+        tournaments = Tournament.objects.filter(pk__in=created_tournament_pks).order_by("-created_at")
+    else:
+        # Fallback: show all tournaments if none are specifically attributed to this organizer
+        # (e.g. created via admin or before audit logs were in place)
+        if organizer.is_staff:
+            tournaments = Tournament.objects.all().order_by("-created_at")
+        else:
+            tournaments = Tournament.objects.none()
+
     return render(request, "core/organizer_public_page.html", {
         "organizer": organizer,
         "profile": profile,
@@ -6059,13 +6084,13 @@ def stop_impersonating(request):
         messages.info(request, "You are not impersonating anyone.")
         return redirect("dashboard")
     original_user = get_object_or_404(User, pk=original_pk)
-    current_username = request.session.get("_auth_user_id", "unknown")
+    impersonated_user_id = request.session.get("_auth_user_id", "unknown")
     original_hash = request.session.pop("impersonating_original_hash", original_user.get_session_auth_hash())
     request.session["_auth_user_id"] = str(original_pk)
     request.session["_auth_user_backend"] = "django.contrib.auth.backends.ModelBackend"
     request.session["_auth_user_hash"] = original_hash
     del request.session["impersonating_original_user_pk"]
-    log_action(request, "impersonation_ended", f"Admin '{original_user.username}' stopped impersonating user pk={current_username}")
+    log_action(request, "impersonation_ended", f"Admin '{original_user.username}' stopped impersonating user pk={impersonated_user_id}")
     messages.success(request, "Impersonation ended.")
     return redirect("settings")
 
