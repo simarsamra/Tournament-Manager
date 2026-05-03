@@ -9,15 +9,21 @@
         <p class="text-muted" style="margin:0.25rem 0 0;">
             Registration: {% if registration_mode == "individual" %}<strong>Individual Players</strong>{% else %}<strong>Teams</strong>{% endif %}
         </p>
+        {% if tournament.expected_teams_count %}
+        <p class="text-muted" style="margin:0.15rem 0 0;font-size:0.9rem;">
+            Registered: {{ participant_list|length|default:team_list|length }} / {{ tournament.expected_teams_count }} {{ tournament.participant_label_plural }}
+            {% if registration_full %}<span class="badge badge-withdrawn" style="margin-left:0.4rem;">Full</span>{% endif %}
+        </p>
+        {% endif %}
     </div>
     <div style="display:flex;gap:0.75rem;align-items:center;">
         {% if registration_mode == "individual" %}
-            {% if not user_registration %}
+            {% if not user_registration and not registration_full %}
             <a href="{% url 'create_team' pk=tournament.pk %}" class="btn btn-primary">+ Register as Participant</a>
             {% endif %}
         {% else %}
-            {% if not user_team %}
-            <a href="{% url 'create_team' pk=tournament.pk %}" class="btn btn-primary">+ Create New Team</a>
+            {% if not user_team and not registration_full %}
+            <a href="{% url 'create_team' pk=tournament.pk %}" class="btn btn-primary">+ Create New {{ tournament.participant_label }}</a>
             <form method="post" action="{% url 'enter_existing_team' pk=tournament.pk %}" style="display:inline;">
                 {% csrf_token %}
                 <button type="submit" class="btn btn-outline">Enter Existing Team</button>
@@ -27,6 +33,12 @@
         <a href="{% url 'join_tournament_list' %}" class="btn btn-outline btn-sm">← Back</a>
     </div>
 </div>
+
+{% if registration_full and not user_team and not user_registration %}
+<div class="alert alert-warning">
+    Registration for this tournament is full ({{ tournament.expected_teams_count }} {{ tournament.participant_label_plural|lower }} reached). No more participants can be added.
+</div>
+{% endif %}
 
 {% if registration_mode == "individual" and user_registration %}
 <div class="alert alert-success">

@@ -1097,6 +1097,10 @@ def join_tournament_view(request, pk):
         "user_registration": user_registration,
         "players_per_team": players_per_team,
         "registration_mode": registration_mode,
+        "registration_full": bool(
+            tournament.expected_teams_count
+            and tournament.teams.filter(status="active").count() >= tournament.expected_teams_count
+        ),
     })
 
 
@@ -1162,7 +1166,7 @@ def create_team_view(request, pk):
         if current_count >= tournament.expected_teams_count:
             messages.error(
                 request,
-                f"Registration is full ({current_count}/{tournament.expected_teams_count}).",
+                f"Registration is full. This tournament only allows {tournament.expected_teams_count} {tournament.participant_label_plural.lower()}.",
             )
             return redirect("join_tournament", pk=pk)
 
@@ -1223,6 +1227,20 @@ def create_team_view(request, pk):
                     tournament=tournament,
                 )
                 messages.success(request, f"Team '{team_name}' created!")
+                # Auto-close registration when limit is reached
+                if (
+                    tournament.expected_teams_count
+                    and tournament.teams.filter(status="active").count() >= tournament.expected_teams_count
+                    and tournament.status == "registration_open"
+                ):
+                    tournament.status = "ready"
+                    tournament.save(update_fields=["status"])
+                    log_action(
+                        request,
+                        "registration_auto_closed",
+                        f"Registration auto-closed: expected {tournament.expected_teams_count} {tournament.participant_label_plural.lower()} reached",
+                        tournament=tournament,
+                    )
                 return redirect("dashboard")
     else:
         form = CreateTeamForm(tournament=tournament)
@@ -1666,12 +1684,15 @@ def tournament_config(request, pk):
         else TeamTournamentParticipation.objects.filter(tournament=tournament, status="active", team__is_internal=False).count()
     )
     required_matches = estimate_required_matches(tournament, team_count=active_count)
+    active_teams_count = active_count
 
     return render(request, "core/tournament_config.html", {
         "tournament": tournament,
         "courts": tournament.courts.all(),
         "court_availabilities": CourtAvailability.objects.filter(court__tournament=tournament).select_related("court"),
         "team_participations": team_participations,
+        "active_teams_count": active_teams_count,
+        "remaining_spots": max(0, (tournament.expected_teams_count or 0) - active_teams_count),
         "time_slots": tournament.time_slots.select_related("court").all(),
         "court_form": CourtForm(),
         "timeslot_form": TimeSlotForm(tournament=tournament),
@@ -2032,6 +2053,15 @@ def _create_teams_from_data(tournament, team_data_list, request):
         if Team.objects.filter(name__iexact=team_name).exists():
             messages.warning(request, f"Team '{team_name}' already exists, skipped.")
             continue
+        # Enforce registration limit
+        if tournament.expected_teams_count:
+            current_count = tournament.teams.filter(status="active").count()
+            if current_count >= tournament.expected_teams_count:
+                messages.warning(
+                    request,
+                    f"Registration limit of {tournament.expected_teams_count} {tournament.participant_label_plural.lower()} reached. '{team_name}' and subsequent entries were skipped.",
+                )
+                break
         user = User.objects.create_user(username=username, password=password)
         team = Team.objects.create(name=team_name)
         TeamTournamentParticipation.objects.create(team=team, tournament=tournament, status="active")
@@ -2094,6 +2124,74 @@ def add_teams_bulk(request, pk):
         messages.warning(request, "No valid team data found.")
 
     return redirect("tournament_config", pk=pk)
+
+
+@login_required
+def estimate_tournament_end_date(request, pk):
+    """Return a JSON estimate of when the tournament will finish."""
+    if not _is_organizer(request.user):
+        return JsonResponse({"error": "Unauthorized"}, status=403)
+    tournament = get_object_or_404(Tournament, pk=pk)
+
+    # Determine team count: prefer actual active teams, fall back to expected count
+    team_count = tournament.teams.filter(status="active").count()
+    if team_count < 2 and (tournament.expected_teams_count or 0) >= 2:
+        team_count = tournament.expected_teams_count
+
+    if team_count < 2:
+        return JsonResponse({"error": "Need at least 2 teams to estimate."})
+
+    required_matches = estimate_required_matches(tournament, team_count=team_count)
+    if required_matches == 0:
+        return JsonResponse({"error": "Unable to estimate matches for this format."})
+
+    # Matches per court per day — honour the stored value or auto-detect from availability
+    courts = list(tournament.courts.filter(is_available=True))
+    court_count = len(courts)
+
+    matches_per_court_per_day = tournament.matches_per_court_per_day  # stored preference
+    if not matches_per_court_per_day:
+        # Derive from CourtAvailability: how many match slots fit in a typical day?
+        availabilities = CourtAvailability.objects.filter(
+            court__tournament=tournament,
+            court__is_available=True,
+            is_active=True,
+        )
+        if availabilities.exists():
+            total_minutes = 0
+            entries = 0
+            for av in availabilities:
+                day_minutes = (
+                    datetime.combine(timezone.localdate(), av.end_time)
+                    - datetime.combine(timezone.localdate(), av.start_time)
+                ).seconds // 60
+                if day_minutes > 0:
+                    total_minutes += day_minutes
+                    entries += 1
+            if entries:
+                avg_minutes = total_minutes / entries
+                matches_per_court_per_day = max(1, int(avg_minutes // tournament.default_match_duration))
+        if not matches_per_court_per_day:
+            matches_per_court_per_day = 4  # sensible default: 4 matches per court per day
+
+    matches_per_day = max(1, matches_per_court_per_day * max(1, court_count))
+    days_needed = math.ceil(required_matches / matches_per_day)
+
+    start = tournament.start_date or timezone.localdate()
+    estimated_end = start + timedelta(days=days_needed - 1)
+
+    return JsonResponse({
+        "team_count": team_count,
+        "required_matches": required_matches,
+        "court_count": court_count,
+        "matches_per_court_per_day": matches_per_court_per_day,
+        "matches_per_day": matches_per_day,
+        "days_needed": days_needed,
+        "start_date": str(start),
+        "estimated_end_date": str(estimated_end),
+        "format_display": tournament.get_format_display(),
+        "participant_label_plural": tournament.participant_label_plural,
+    })
 
 
 @login_required
@@ -3278,11 +3376,19 @@ def teams_view(request):
                 participation = team.participations.filter(tournament=tournament).first()
                 team.group = participation.group if participation else ""
 
+    is_organizer = _is_organizer(request.user)
+    teams_colspan = 3  # Name, Status, Account/Actions
+    if tournament and tournament.players_per_team > 1:
+        teams_colspan += 2  # Department, Players
+    if tournament and tournament.format == "hybrid":
+        teams_colspan += 1  # Group
+
     return render(request, "core/teams.html", {
         "tournament": tournament, "teams": teams,
         "participant_list": participant_list,
         "registration_mode": registration_mode,
-        "is_organizer": _is_organizer(request.user),
+        "is_organizer": is_organizer,
+        "teams_colspan": teams_colspan,
         **_tournament_context(request, tournament),
     })
 
@@ -3563,6 +3669,37 @@ def withdraw_team(request, pk):
     handle_withdrawal(request, team, tournament)
     messages.success(request, f"Team '{team.name}' has been withdrawn.")
     return redirect("teams")
+
+
+@login_required
+@require_POST
+def organizer_remove_team(request, pk):
+    """Organizer-only: permanently remove a team from a tournament before it goes active."""
+    if not _is_organizer(request.user):
+        messages.error(request, "Only organizers can remove teams.")
+        return redirect("team_detail", pk=pk)
+    team = get_object_or_404(Team, pk=pk)
+    tournament = team.tournament
+    if tournament.status in ("active", "completed"):
+        messages.error(
+            request,
+            "Cannot remove a team from an active or completed tournament. Use 'Withdraw' instead to forfeit remaining matches.",
+        )
+        return redirect("team_detail", pk=pk)
+    team_name = team.name
+    captain_user = team.user
+    team.delete()
+    # Remove the captain account if they have no other teams
+    if not captain_user.captained_teams.exists():
+        captain_user.delete()
+    log_action(
+        request,
+        "team_removed",
+        f"Organizer removed team '{team_name}' from '{tournament.name}'",
+        tournament=tournament,
+    )
+    messages.success(request, f"Team '{team_name}' has been removed from the tournament.")
+    return redirect("tournament_config", pk=tournament.pk)
 
 
 @login_required

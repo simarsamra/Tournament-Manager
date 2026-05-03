@@ -14,7 +14,7 @@ class TournamentForm(forms.ModelForm):
             "start_date", "end_date", "expected_teams_count",
             "points_per_win", "points_per_loss",
             "points_per_draw", "num_groups", "teams_per_group_advance",
-            "withdrawal_policy", "default_match_duration",
+            "withdrawal_policy", "default_match_duration", "matches_per_court_per_day",
         ]
         widgets = {
             "name": forms.TextInput(attrs={"class": "form-control"}),
@@ -32,6 +32,7 @@ class TournamentForm(forms.ModelForm):
             "teams_per_group_advance": forms.NumberInput(attrs={"class": "form-control"}),
             "withdrawal_policy": forms.Select(attrs={"class": "form-select"}),
             "default_match_duration": forms.NumberInput(attrs={"class": "form-control", "min": "5"}),
+            "matches_per_court_per_day": forms.NumberInput(attrs={"class": "form-control", "min": "0"}),
         }
 
     def __init__(self, *args, **kwargs):
