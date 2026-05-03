@@ -52,7 +52,7 @@
                 </td>
             </tr>
             {% empty %}
-            <tr><td colspan="{% if tournament.format == 'hybrid' %}{% if tournament.players_per_team > 1 %}8{% else %}6{% endif %}{% else %}{% if tournament.players_per_team > 1 %}7{% else %}5{% endif %}{% endif %}" class="text-center text-muted">No {{ tournament.participant_label_plural|lower }} registered.</td></tr>
+            <tr><td colspan="{{ teams_colspan }}" class="text-center text-muted">No {{ tournament.participant_label_plural|lower }} registered.</td></tr>
             {% endfor %}
         </tbody>
     </table>

@@ -154,7 +154,7 @@
                 {% if active_teams_count >= tournament.expected_teams_count %}
                 <span class="badge badge-withdrawn" style="margin-left:0.5rem;">Full</span>
                 {% else %}
-                <span class="badge badge-scheduled" style="margin-left:0.5rem;">{{ tournament.expected_teams_count|add:"-0"|add:"0" }}{% with remaining=tournament.expected_teams_count|add:active_teams_count %}{% endwith %} open</span>
+                <span class="badge badge-scheduled" style="margin-left:0.5rem;">{{ remaining_spots }} open</span>
                 {% endif %}
             {% endif %}
         </div>
@@ -175,7 +175,7 @@
                     <div class="d-flex" style="gap:0.35rem;align-items:center;">
                         <span class="badge badge-{{ t.status }}">{{ t.get_status_display }}</span>
                         {% if tournament.status != 'active' and tournament.status != 'completed' %}
-                        <form method="post" action="{% url 'organizer_remove_team' pk=t.pk %}" style="display:inline;" onsubmit="return confirm('Remove {{ t.name }} from this tournament? This cannot be undone.')">
+                        <form method="post" action="{% url 'organizer_remove_team' pk=t.pk %}" style="display:inline;" onsubmit="return confirm('Permanently remove {{ t.name }} and their account from this tournament? This cannot be undone.')">
                             {% csrf_token %}
                             <button type="submit" class="btn btn-sm" style="background:#dc3545;color:#fff;padding:0.15rem 0.45rem;font-size:0.75rem;">✕ Remove</button>
                         </form>
@@ -307,8 +307,8 @@
                 }
                 content.innerHTML =
                     '<dl style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 1rem;margin:0;">' +
-                    '<dt class="text-muted">Format</dt><dd style="margin:0;">{{ tournament.get_format_display }}</dd>' +
-                    '<dt class="text-muted">{{ tournament.participant_label_plural }}</dt><dd style="margin:0;">' + data.team_count + '</dd>' +
+                    '<dt class="text-muted">Format</dt><dd style="margin:0;">' + data.format_display + '</dd>' +
+                    '<dt class="text-muted">' + data.participant_label_plural + '</dt><dd style="margin:0;">' + data.team_count + '</dd>' +
                     '<dt class="text-muted">Required matches</dt><dd style="margin:0;">' + data.required_matches + '</dd>' +
                     '<dt class="text-muted">Available courts</dt><dd style="margin:0;">' + data.court_count + '</dd>' +
                     '<dt class="text-muted">Matches / court / day</dt><dd style="margin:0;">' + data.matches_per_court_per_day + '</dd>' +

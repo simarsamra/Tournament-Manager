@@ -1215,12 +1215,14 @@ def tournament_config(request, pk):
         ko_tbd = tournament.matches.filter(team1__isnull=True, team2__isnull=True, group="").exists()
         show_proceed_knockout = group_qs.exists() and not pending.exists() and ko_tbd
 
+    active_teams_count = tournament.teams.filter(status="active").count()
     return render(request, "core/tournament_config.html", {
         "tournament": tournament,
         "courts": tournament.courts.all(),
         "court_availabilities": CourtAvailability.objects.filter(court__tournament=tournament).select_related("court"),
         "teams": teams,
-        "active_teams_count": tournament.teams.filter(status="active").count(),
+        "active_teams_count": active_teams_count,
+        "remaining_spots": max(0, (tournament.expected_teams_count or 0) - active_teams_count),
         "time_slots": tournament.time_slots.select_related("court").all(),
         "court_form": CourtForm(),
         "timeslot_form": TimeSlotForm(tournament=tournament),
@@ -1502,10 +1504,9 @@ def estimate_tournament_end_date(request, pk):
     courts = list(tournament.courts.filter(is_available=True))
     court_count = len(courts)
 
-    mpd = tournament.matches_per_court_per_day  # stored preference
-    if not mpd:
+    matches_per_court_per_day = tournament.matches_per_court_per_day  # stored preference
+    if not matches_per_court_per_day:
         # Derive from CourtAvailability: how many match slots fit in a typical day?
-        duration = timedelta(minutes=max(1, tournament.default_match_duration))
         availabilities = CourtAvailability.objects.filter(
             court__tournament=tournament,
             court__is_available=True,
@@ -1524,11 +1525,11 @@ def estimate_tournament_end_date(request, pk):
                     entries += 1
             if entries:
                 avg_minutes = total_minutes / entries
-                mpd = max(1, int(avg_minutes // tournament.default_match_duration))
-        if not mpd:
-            mpd = 4  # sensible default: 4 matches per court per day
+                matches_per_court_per_day = max(1, int(avg_minutes // tournament.default_match_duration))
+        if not matches_per_court_per_day:
+            matches_per_court_per_day = 4  # sensible default: 4 matches per court per day
 
-    matches_per_day = max(1, mpd * max(1, court_count))
+    matches_per_day = max(1, matches_per_court_per_day * max(1, court_count))
     days_needed = math.ceil(required_matches / matches_per_day)
 
     start = tournament.start_date or timezone.localdate()
@@ -1538,11 +1539,13 @@ def estimate_tournament_end_date(request, pk):
         "team_count": team_count,
         "required_matches": required_matches,
         "court_count": court_count,
-        "matches_per_court_per_day": mpd,
+        "matches_per_court_per_day": matches_per_court_per_day,
         "matches_per_day": matches_per_day,
         "days_needed": days_needed,
         "start_date": str(start),
         "estimated_end_date": str(estimated_end),
+        "format_display": tournament.get_format_display(),
+        "participant_label_plural": tournament.participant_label_plural,
     })
 
 
@@ -2250,9 +2253,17 @@ def teams_view(request):
             **_tournament_context(request, tournament),
         })
     teams = tournament.teams.select_related("user").prefetch_related("players").order_by("name")
+    is_organizer = _is_organizer(request.user)
+    # Columns: Name + (Department + Players if multi-player) + (Group if hybrid) + Status + Account + Actions
+    teams_colspan = 3  # Name, Status, Account/Actions
+    if tournament.players_per_team > 1:
+        teams_colspan += 2  # Department, Players
+    if tournament.format == "hybrid":
+        teams_colspan += 1  # Group
     return render(request, "core/teams.html", {
         "tournament": tournament, "teams": teams,
-        "is_organizer": _is_organizer(request.user),
+        "is_organizer": is_organizer,
+        "teams_colspan": teams_colspan,
         **_tournament_context(request, tournament),
     })
 
@@ -2461,10 +2472,10 @@ def organizer_remove_team(request, pk):
         return redirect("team_detail", pk=pk)
     team = get_object_or_404(Team, pk=pk)
     tournament = team.tournament
-    if tournament.status == "active":
+    if tournament.status in ("active", "completed"):
         messages.error(
             request,
-            "Cannot remove a team from an active tournament. Use 'Withdraw' instead to forfeit remaining matches.",
+            "Cannot remove a team from an active or completed tournament. Use 'Withdraw' instead to forfeit remaining matches.",
         )
         return redirect("team_detail", pk=pk)
     team_name = team.name
